@@ -24,9 +24,6 @@ This repository is a monorepo with two components that share a single backend co
 
 ## Getting Started
 
-The fastest path to a running instance is the bundled Ubuntu installer, which provisions Node,
-Python, an embedded PostgreSQL database, TLS and the application itself:
-
 ```bash
-git clone https://github.com/llm-d-incubation/llm-d-lens.git
+git clone git@github.com:project-cb-lab/llm-d-lens.git
 ```
