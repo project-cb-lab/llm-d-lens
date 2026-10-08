@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Name }}-epp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      router: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        router: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: router
+          image: example.invalid/router:v1
+      volumes:
+        {{- .Values.router.proxy.presets.envoy.volumes | toYaml | nindent 8 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Values.router.proxy.presets.envoy.configMap.name }}
+data:
+  envoy.yaml: '{}'
+  plugins.yaml: {{ index .Values.router.epp.pluginsCustomConfig "plugins.yaml" | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Name }}-epp
+spec:
+  selector:
+    router: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      {{- .Values.router.modelServers.matchLabels | toYaml | nindent 6 }}
+  targetPorts:
+    - number: 8000
+  endpointPickerRef:
+    name: {{ .Release.Name }}-epp
+    port:
+      number: 9002
+{{ range .Values.router.inferenceObjectives }}
+---
+apiVersion: llm-d.ai/v1alpha2
+kind: InferenceObjective
+metadata:
+  namespace: {{ $.Release.Namespace }}
+  name: {{ .name }}
+spec:
+  priority: {{ .priority }}
+  poolRef:
+    name: {{ $.Release.Name }}
+{{ end }}
