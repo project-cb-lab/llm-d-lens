@@ -55,6 +55,40 @@ def test_the_rollout_strategy_is_not_part_of_the_revision():
     ]
 
 
+def test_a_set_lws_1_0_created_rolls_on_any_role_field_it_hashes():
+    """lws 1.0 hashes the whole role of a set it created (``revision-hash-version: v2``), so a
+    change an older set would only apply in place rolls every group."""
+    v2 = {"disaggregatedset.x-k8s.io/revision-hash-version": "v2"}
+
+    def kind(edit, annotations=None, desired=None):
+        live, desired = disaggregated_set(), desired or disaggregated_set()
+        live["metadata"]["annotations"] = annotations
+        for role in desired["spec"]["roles"]:
+            edit(role)
+        return set_change(live, desired).kind
+
+    def startup(role):
+        role["spec"]["startupPolicy"] = "LeaderReady"
+
+    def labels(role):
+        role["metadata"] = {"labels": {"tier": "gold"}}
+
+    def termination(role):
+        # The default, which lws hashes as unset: the set changes, nothing rolls.
+        role["spec"]["podTerminationPolicy"] = "Sequential"
+
+    def unchanged(role):
+        pass
+
+    assert kind(startup) == "strategy" and kind(labels) == "strategy"
+    assert kind(startup, v2) == "roll" and kind(labels, v2) == "roll"
+    assert kind(termination, v2) == "strategy"
+    # Outside the revision either way: replicas, and the rollout strategy.
+    assert kind(unchanged, v2, disaggregated_set(decode=4)) == "scale"
+    assert kind(unchanged, v2, disaggregated_set(prefill_unavailable=1)) == "strategy"
+    assert kind(unchanged, v2, disaggregated_set(image="v2")) == "roll"
+
+
 def test_server_defaults_are_not_a_change():
     live = disaggregated_set()
     live["metadata"].update(uid="u", resourceVersion="9", generation=3)

@@ -2,8 +2,11 @@
 
 For each DisaggregatedSet the change is one of
 
-* ``roll``: a role's ``leaderWorkerTemplate`` changed. lws hashes each role's name and
-  ``leaderWorkerTemplate`` into the revision, so every group of every role is replaced;
+* ``roll``: a part of a role that lws hashes into the revision changed, so every group of
+  every role is replaced. A set lws 1.0 created (annotation ``revision-hash-version: v2``)
+  hashes the whole role except ``replicas``, ``rolloutStrategy``, ``groupReplacementPolicy``,
+  ``scaling`` and ``subRoles``; an older set hashes only ``leaderWorkerTemplate`` and
+  ``groupIdentity``;
 * ``scale``: only ``replicas`` changed: groups are added or removed, nothing rolls;
 * ``strategy``: only ``rolloutStrategy`` (or another field outside the revision) changed;
 * ``none``.
@@ -21,8 +24,13 @@ from typing import Any
 from ..importing import comparable, drift
 from ..model import object_ref
 
-#: The parts of a role that lws hashes into the revision (``ComputeRevision``).
-REVISION_FIELDS = ("leaderWorkerTemplate",)
+#: The set's annotation that says which revision hash lws uses for it (lws 1.0 and later).
+REVISION_HASH_ANNOTATION = "disaggregatedset.x-k8s.io/revision-hash-version"
+#: What lws leaves out of the revision of a ``v2`` set (``ComputeRevision``): the rest of the
+#: role, its labels and annotations included, is hashed. An older set hashes only each role's
+#: ``leaderWorkerTemplate`` and ``groupIdentity`` (``ComputeRevisionV1``).
+OUTSIDE_REVISION = ("replicas", "rolloutStrategy", "groupReplacementPolicy")
+OUTSIDE_REVISION_ROLE = ("scaling", "subRoles")
 
 
 @dataclass
@@ -66,9 +74,28 @@ class SetChange:
 
 def _roles(document: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
-        str(role.get("name") or index): role.get("spec") or {}
+        str(role.get("name") or index): role
         for index, role in enumerate((document.get("spec") or {}).get("roles") or [])
     }
+
+
+def revision_part(role: dict[str, Any], hash_version: str) -> dict[str, Any]:
+    """The part of a role that lws hashes into the revision, as compared."""
+    spec = role.get("spec") or {}
+    if hash_version != "v2":
+        identity = spec.get("groupIdentity")
+        return {
+            "leaderWorkerTemplate": comparable_part(spec.get("leaderWorkerTemplate")),
+            # lws normalizes the default identity, so Ordinal and unset hash the same.
+            "groupIdentity": None if identity in (None, "", "Ordinal") else identity,
+        }
+    part = {key: value for key, value in role.items() if key not in OUTSIDE_REVISION_ROLE}
+    metadata = role.get("metadata") or {}
+    part["metadata"] = {key: metadata[key] for key in ("labels", "annotations") if metadata.get(key)}
+    part["spec"] = {key: value for key, value in spec.items() if key not in OUTSIDE_REVISION}
+    if part["spec"].get("podTerminationPolicy") == "Sequential":  # the default, normalized by lws
+        part["spec"].pop("podTerminationPolicy")
+    return {key: comparable_part(value) for key, value in part.items()}
 
 
 def _int_or_percent(value: Any, of: int, *, round_up: bool) -> int:
@@ -79,16 +106,18 @@ def _int_or_percent(value: Any, of: int, *, round_up: bool) -> int:
 
 
 def set_change(live: dict[str, Any], desired: dict[str, Any]) -> SetChange:
-    """How a DisaggregatedSet changes from ``live`` to ``desired``."""
+    """How a DisaggregatedSet changes from ``live`` to ``desired``. The live set's annotation says
+    which revision hash lws uses for it."""
     before, after = _roles(live), _roles(desired)
+    hash_version = ((live.get("metadata") or {}).get("annotations") or {}).get(REVISION_HASH_ANNOTATION, "")
     roles = []
     rolls = scales = False
-    for name, spec in after.items():
-        old = before.get(name) or {}
+    for name, role in after.items():
+        spec, old = role.get("spec") or {}, (before.get(name) or {}).get("spec") or {}
         strategy = ((spec.get("rolloutStrategy") or {}).get("rollingUpdateConfiguration")) or {}
         replicas = int(spec.get("replicas") or 0)
-        changed = any(
-            drift(comparable_part(spec.get(key)), comparable_part(old.get(key))) for key in REVISION_FIELDS
+        changed = name in before and bool(
+            drift(revision_part(role, hash_version), revision_part(before[name], hash_version))
         )
         roles.append(
             RoleChange(
