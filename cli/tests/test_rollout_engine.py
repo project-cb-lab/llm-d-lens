@@ -101,8 +101,28 @@ def test_watch_stops_when_the_drainers_exit_early(rollrepo, cluster, tmp_path): 
     cluster.refuse_scale_down = lambda lws, replicas: False
     cluster.roll_step(NS, "model-p")
     kube = Kube(runner=cluster)
-    with pytest.raises(NotReadyError, match="drainers exited"):
+    with pytest.raises(NotReadyError, match="drainer exited"):
         engine.watch(kube, NS, "pd", state=tmp_path, pool_label=POOL, timeout=10, interval=0.2)
+
+
+def test_watch_stops_when_one_role_has_no_drainer_left(rollrepo, cluster, tmp_path):  # noqa: F811
+    script = 'import sys, time; time.sleep(600 if sys.argv[1] == "prefill" else 0)'
+    one = f"{sys.executable} -c '{script}' {{role}}"
+    started(rollrepo, cluster, tmp_path, drain=one)
+    cluster.refuse_scale_down = lambda lws, replicas: False
+    cluster.roll_step(NS, "model-p")
+    kube = Kube(runner=cluster)
+    with pytest.raises(NotReadyError, match="the decode drainer exited while old decode groups remain"):
+        engine.watch(kube, NS, "pd", state=tmp_path, pool_label=POOL, timeout=10, interval=0.2)
+
+
+def test_abort_progress_counts_toward_the_restored_revision(rollrepo, cluster, tmp_path):  # noqa: F811
+    planned, _ = started(rollrepo, cluster, tmp_path)
+    kube = Kube(runner=cluster)
+    cluster.roll_step(NS, "model-p")
+    engine.abort(kube, NS, "pd", server_side=False)
+    current = engine.status(kube, NS, "pd", state=tmp_path, pool_label=POOL)
+    assert current["progress"]["target"] == planned.before.target and not current["done"]
 
 
 def test_abort_restores_the_previous_template(rollrepo, cluster, tmp_path):  # noqa: F811

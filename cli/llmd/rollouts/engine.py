@@ -163,7 +163,12 @@ def progress_of(kube: Kube, record: dict[str, Any], *, pool_label: str) -> Progr
     if not name:
         return None
     live = kube.require(DS_RESOURCE, name, record["namespace"])
-    return read_progress(kube, record["namespace"], live, pool_label=pool_label)
+    progress = read_progress(kube, record["namespace"], live, pool_label=pool_label)
+    rollout = record.get("rollout") or {}
+    if rollout.get("phase") == "Aborting" and rollout.get("fromRevision"):
+        # An abort rolls back to the revision the rollout started from, though its sets are older.
+        progress.target = rollout["fromRevision"]
+    return progress
 
 
 def status(kube: Kube, namespace: str, instance: str, *, state: Path, pool_label: str) -> dict[str, Any]:
@@ -290,15 +295,13 @@ def watch(
             last = line
         if current["done"]:
             return finish(kube, namespace, instance, state=state, pool_label=pool_label)
-        if (
-            current["drainers"]["exited"]
-            and not current["drainers"]["running"]
-            and current["phase"] != "Paused"
-        ):
-            logs = ", ".join(item["log"] for item in current["drainers"]["exited"])
+        stalled = _stalled(current)
+        if stalled and current["phase"] != "Paused":
+            roles = ", ".join(item["role"] for item in stalled)
+            logs = ", ".join(item["log"] for item in stalled)
             raise NotReadyError(
-                "the drainers exited while old groups remain; the roll waits for them",
-                hint=f"Read their logs ({logs}), then `llmd rollouts resume`, or `llmd rollouts abort`.",
+                f"the {roles} drainer exited while old {roles} groups remain; the roll waits for it",
+                hint=f"Read its log ({logs}), then `llmd rollouts resume`, or `llmd rollouts abort`.",
             )
         if time.monotonic() >= deadline:
             raise NotReadyError(
@@ -306,6 +309,21 @@ def watch(
                 hint="It keeps going with the drainers; follow it with `llmd rollouts status --watch`.",
             )
         time.sleep(interval)
+
+
+def _stalled(current: dict[str, Any]) -> list[dict[str, Any]]:
+    """Exited drainers whose role still has groups of a revision the roll moves away from."""
+    progress = current.get("progress") or {}
+    roles = progress.get("roles") or {}
+    target = progress.get("target")
+    return [
+        drainer
+        for drainer in current["drainers"]["exited"]
+        if any(
+            revision != target and value["groups"]
+            for revision, value in (roles.get(drainer["role"]) or {}).get("byRevision", {}).items()
+        )
+    ]
 
 
 def describe_progress(current: dict[str, Any]) -> str:
