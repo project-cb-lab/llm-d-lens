@@ -110,6 +110,12 @@ def test_cluster_scoped_objects_and_scc_bindings_are_for_an_administrator():
     allowed = apply_policy([scc], PolicyContext(namespace="team-a", instance="r1", allow_privileged=True))
     assert [doc["kind"] for doc in allowed.documents] == ["RoleBinding"] and not codes(allowed)
 
+    # An administrator applied the binding; the team acknowledges the privileged pods it admits.
+    both = apply_policy(
+        [scc], PolicyContext(namespace="team-a", instance="r1", allow_privileged=True, skip_admin_parts=True)
+    )
+    assert both.documents == [] and codes(both, "warning") == ["admin-part-skipped"]
+
 
 def test_privileged_pods_and_host_paths_block_unless_acknowledged():
     risky = deployment(hostNetwork=True)

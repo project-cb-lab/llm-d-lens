@@ -282,18 +282,20 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
 
     documents = []
     for document in kept:
-        if _is_scc_binding(document) and not context.allow_privileged:
-            if context.skip_admin_parts:
-                findings.append(
-                    Finding(
-                        "warning",
-                        "admin-part-skipped",
-                        f"{object_ref(document)} left out: an administrator applies it",
-                    )
+        # --skip-admin-parts wins over --allow-privileged: an administrator applied the binding, and
+        # the privileged pods it admits still need the acknowledgement.
+        if _is_scc_binding(document) and context.skip_admin_parts:
+            findings.append(
+                Finding(
+                    "warning",
+                    "admin-part-skipped",
+                    f"{object_ref(document)} left out: an administrator applies it",
                 )
-            else:
-                result.admin_parts.append({"document": document, "reason": "scc-binding"})
-                findings.append(_scc_finding(document))
+            )
+            continue
+        if _is_scc_binding(document) and not context.allow_privileged:
+            result.admin_parts.append({"document": document, "reason": "scc-binding"})
+            findings.append(_scc_finding(document))
             continue
         if context.label:
             labels = document["metadata"].setdefault("labels", {}) or {}

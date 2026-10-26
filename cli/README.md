@@ -53,6 +53,8 @@ references to the namespace it was written for), and reports what blocks a stand
 administrator may apply (`--admin-yaml FILE` writes them; `--skip-admin-parts` once they are applied),
 privileged containers and hostPath volumes (`--allow-privileged` once an administrator granted them), missing
 Secrets, claims and network attachments, missing permissions, and objects another tool already deployed.
+For a stack that grants an SCC to its pods, the administrator applies the binding from `--admin-yaml`; the
+team then passes both `--skip-admin-parts` and `--allow-privileged`.
 
 `standup` records the instance before it applies anything, then applies with server-side apply. `teardown`
 deletes exactly the recorded objects whose UID still matches; claims are kept unless `--delete-volumes`.
