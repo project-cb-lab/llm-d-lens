@@ -34,8 +34,10 @@ PREREQUISITES = {
 def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
     """Check ``plan`` against the cluster and add findings to it.
 
-    ``existing`` says what an object that is already there but not this instance's means:
-    ``refuse`` (standup: an error) or ``import`` (the objects must all be there)."""
+    ``existing`` says what the plan is for: ``refuse`` (standup: an object that is already there
+    but not this instance's is an error), ``import`` (the objects run already and are only
+    recorded), or ``rollout`` (the instance's own objects change; no dry run of the whole stack,
+    the rollout applies only what changed)."""
     findings = plan.findings
     plan.cluster["context"] = kube.current_context()
     plan.cluster["user"] = kube.whoami()
@@ -58,7 +60,7 @@ def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
     _check_permissions(kube, plan, write=existing != "import")
     _check_prerequisites(kube, plan)
     _check_existing(kube, plan, existing)
-    if plan.blocking or existing == "import":
+    if plan.blocking or existing in ("import", "rollout"):
         plan.cluster["dryRun"] = "skipped"
         return
     try:

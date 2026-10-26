@@ -143,3 +143,27 @@ def test_rollout_commands(rollrepo, cluster, tmp_path, capsys, monkeypatch):  # 
         pass
     assert main([*state, "rollouts", "finish", "pd", "-n", NS]) == 0
     assert "finished at revision" in capsys.readouterr().out
+
+
+def test_a_privileged_imported_stack_rolls_through_the_cli(rollrepo, cluster, tmp_path, capsys, monkeypatch):  # noqa: F811
+    """GLM-5.3 production runs privileged pods with hostPath mounts; an imported stack's findings
+    describe what runs and do not block its rollout."""
+    path = rollrepo / "manifests/production/model-p/base/disaggregatedset.yaml"
+    text = path.read_text().replace(
+        "                - name: vllm\n",
+        "                - name: vllm\n                  securityContext: {privileged: true}\n",
+    )
+    path.write_text(text)
+    git_commit(rollrepo)
+    monkeypatch.setattr("llmd.commands.RUNNER", cluster)
+    state = ["--state-dir", str(tmp_path)]
+    target = [STACK, "--source", str(rollrepo), "-n", NS, "--name", "pd"]
+    assert main([*state, "rollouts", "plan", *target]) == 0
+    assert "Result ready to start" in capsys.readouterr().out
+    assert main([*state, "rollouts", "start", *target, "--no-drain"]) == 0
+
+
+def git_commit(repo):
+    from .conftest import git
+
+    git(repo, "commit", "-q", "-am", "privileged")

@@ -8,6 +8,7 @@ import time
 
 from .. import inventory
 from ..errors import PolicyError, UsageError
+from ..preflight import preflight
 from ..rollouts import engine
 from ..rollouts.plan import RolloutPlan, plan_rollout
 from . import Context, Handler, add_target_arguments
@@ -103,8 +104,12 @@ def rollout_plan(ctx: Context) -> RolloutPlan:
     if not name:
         raise UsageError("pass --name: the instance to roll")
     record = inventory.require(kube, namespace, name)
-    # Rendered the way the instance was deployed: an imported stack carries no llmd labels.
-    plan = plan_from_args(ctx, kube, label=inventory.management(record) != inventory.IMPORTED)
+    imported = inventory.management(record) == inventory.IMPORTED
+    # Rendered the way the instance was deployed: an imported stack carries no llmd labels. Its
+    # objects already run, so privileged findings describe them (as for an import) instead of
+    # blocking; an instance llmd stood up was planned with the same acknowledgements as before.
+    plan = plan_from_args(ctx, kube, label=not imported)
+    preflight(kube, plan, existing="import" if imported else "rollout")
     return plan_rollout(kube, plan, floors=_floors(ctx.args.floor), pool_label=ctx.args.pool_label)
 
 
