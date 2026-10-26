@@ -217,3 +217,19 @@ def test_an_instance_llmd_stood_up_rolls_with_server_side_apply(rollrepo, tmp_pa
     assert main([*state, "rollouts", "finish", "pd", "-n", "team-a"]) == 0
     assert main([*state, "teardown", "pd", "-n", "team-a", "-y"]) == 0
     assert fresh.get("team-a", DS, "model-p") is None
+
+
+def test_a_rollout_never_records_a_secret(rollrepo, cluster, tmp_path):  # noqa: F811
+    from llmd.errors import PolicyError
+
+    base = rollrepo / "manifests/production/model-p/base"
+    (base / "secret.yaml").write_text(
+        "apiVersion: v1\nkind: Secret\nmetadata: {name: token}\nstringData: {t: x}\n"
+    )
+    kustomization = base / "kustomization.yaml"
+    kustomization.write_text(
+        kustomization.read_text().replace("  - service.yaml\n", "  - service.yaml\n  - secret.yaml\n")
+    )
+    with pytest.raises(PolicyError, match="Secret/token"):
+        engine.start(Kube(runner=cluster), rollout(rollrepo, cluster), drain="-", state=tmp_path)
+    assert "rollout" not in inventory.require(Kube(runner=cluster), NS, "pd")

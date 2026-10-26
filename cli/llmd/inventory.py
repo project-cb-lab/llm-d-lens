@@ -2,8 +2,12 @@
 
 The cluster, not a laptop, is the source of truth for what an instance owns, so status,
 rollouts and teardown work from any machine and after a crash. The record holds object
-identities and UIDs only, never manifest bodies or Secret data, and it is written before
-the first object is applied, so an interrupted standup can still be torn down.
+identities and UIDs, and it is written before the first object is applied, so an
+interrupted standup can still be torn down. During a rollout it also holds the bodies of
+the objects the rollout changes, as they were (``rollout.previous``), which is what
+``rollouts abort`` re-applies; Secrets are never among them, since a rollout never applies
+one the instance does not render. A DisaggregatedSet body is tens of kilobytes, well inside
+a ConfigMap's 1 MiB.
 
 ``management`` says how the instance's objects got there:
 

@@ -101,6 +101,13 @@ def start(
     changed = rollout.change.changed_documents(plan.documents)
     if not changed:
         raise UsageError("nothing to roll out: the instance already runs what this ref renders")
+    secrets = [object_ref(doc) for doc in changed if doc["kind"] == "Secret"]
+    if secrets:
+        # The record keeps what a rollout changes, as it was, for abort; never a Secret's data.
+        raise PolicyError(
+            f"the rollout would change {', '.join(secrets)}",
+            hint="Update Secrets outside a rollout; llmd never records their data.",
+        )
     names = dict(zip((object_ref(doc) for doc in plan.documents), resources(kube, plan), strict=True))
     previous = []
     for document in changed:
