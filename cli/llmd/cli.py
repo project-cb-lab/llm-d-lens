@@ -12,6 +12,7 @@ import sys
 
 from . import __version__
 from .commands import Context, Handler
+from .commands import render as render_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .errors import LlmdError
@@ -22,10 +23,11 @@ examples:
   llmd sources add cb-local /path/to/curvebender-tools
   llmd sources list
   llmd stacks manifests/production                             # the stacks of the source
+  llmd render manifests/production/<model>/<cluster>           # the objects, as `oc apply -k` sends them
 """
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
-COMMAND_MODULES = [sources_command, stacks_command]
+COMMAND_MODULES = [sources_command, stacks_command, render_command]
 
 
 def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Handler]]:
