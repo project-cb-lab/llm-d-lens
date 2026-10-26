@@ -90,7 +90,9 @@ llmd rollouts start "$STACK" -n <namespace> --name <instance> --source "$NEW" \
 `rollouts plan` is read-only. It shows the objects that change, whether the DisaggregatedSet rolls or only
 scales, the steps, and the groups each role keeps serving during a step. It refuses a rollout while a roll is
 in progress or a group is not serving, when several DisaggregatedSets would roll at once, when roles are
-added or removed, and when a step would leave a role below its `--floor`.
+added or removed, and when a step would leave a role below its `--floor`. It also refuses a step that leaves
+a role with no group serving (a role of one group with `maxSurge: 0`); `--allow-outage` accepts that
+outage.
 
 `rollouts start` starts the stack's drain command once per role (`--drain`, with `{role}`, `{source}`,
 `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}` filled in), then applies only the objects that

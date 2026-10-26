@@ -7,6 +7,7 @@ and refuses what is not one safe in-place rollout:
 * more than one DisaggregatedSet would roll at once;
 * a role would be added or removed (that is not an in-place roll);
 * ``--floor`` says a role must keep N groups serving and a step would go below it;
+* a step would leave a role with no group serving (``--allow-outage`` accepts it);
 * the stack renders an object the namespace policy refuses (the same checks as a standup).
 """
 
@@ -81,7 +82,9 @@ class RolloutPlan:
         }
 
 
-def plan_rollout(kube: Kube, plan: Plan, *, floors: dict[str, int], pool_label: str = "") -> RolloutPlan:
+def plan_rollout(
+    kube: Kube, plan: Plan, *, floors: dict[str, int], pool_label: str = "", allow_outage: bool = False
+) -> RolloutPlan:
     record = inventory.require(kube, plan.namespace, plan.instance)
     phase = (record.get("rollout") or {}).get("phase")
     if phase in ("Rolling", "Paused", "Aborting"):
@@ -130,6 +133,7 @@ def plan_rollout(kube: Kube, plan: Plan, *, floors: dict[str, int], pool_label: 
                     hint="Adding or removing a role is not an in-place roll.",
                 )
             )
+        had = {role.name: role.replicas[0] for role in item.roles}
         for role, serving in item.serving_during().items():
             floor = floors.get(role)
             if floor is not None and serving < floor:
@@ -140,6 +144,16 @@ def plan_rollout(kube: Kube, plan: Plan, *, floors: dict[str, int], pool_label: 
                         f"{item.name}/{role}: each step keeps {serving} group(s) serving, below the "
                         f"floor of {floor}",
                         hint="Lower the role's maxUnavailable in the stack, or the floor.",
+                    )
+                )
+            elif serving == 0 and had.get(role):
+                findings.append(
+                    Finding(
+                        "warning" if allow_outage else "error",
+                        "no-group-serving",
+                        f"{item.name}/{role}: a step removes every group of the role, so it serves "
+                        "nothing until the new groups are Ready",
+                        hint="Raise the role's replicas or maxSurge in the stack, or pass --allow-outage.",
                     )
                 )
     if not any(state != "same" for state in change.objects.values()):

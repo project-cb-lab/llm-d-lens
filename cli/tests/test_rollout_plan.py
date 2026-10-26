@@ -95,6 +95,22 @@ def test_a_floor_a_step_would_break_blocks(rollrepo, cluster):
     assert [f.code for f in planned.blocking] == ["below-floor"]
 
 
+def test_a_step_that_leaves_a_role_with_no_group_serving_blocks_unless_accepted(rollrepo, cluster):
+    """A role of one group with maxSurge 0 serves nothing while its group is replaced."""
+    path = rollrepo / "manifests/production/model-p/base/disaggregatedset.yaml"
+    path.write_text(path.read_text().replace("replicas: 3", "replicas: 1"))
+    git(rollrepo, "commit", "-q", "-am", "one decode group")
+    rendered = render(find_stack(resolve_source(str(rollrepo)), STACK), runner=cluster).documents
+    cluster.put(NS, next(doc for doc in rendered if doc["kind"] == "DisaggregatedSet"))  # what runs
+    cluster.settle()
+    new_image(rollrepo)
+    planned = rollout(rollrepo, cluster)
+    assert planned.change.roll.serving_during() == {"prefill": 2, "decode": 0}
+    assert [f.code for f in planned.blocking] == ["no-group-serving"]
+    accepted = rollout(rollrepo, cluster, allow_outage=True)
+    assert not accepted.blocking and "no-group-serving" in [f.code for f in accepted.findings]
+
+
 def test_a_roll_in_progress_or_a_group_out_of_the_pool_blocks(rollrepo, cluster):
     pod = next(item for key, item in cluster.objects.items() if key[1] == "pods" and "-decode-" in key[2])
     pod["metadata"]["labels"][POOL] = "false"

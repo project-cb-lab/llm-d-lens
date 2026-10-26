@@ -37,6 +37,11 @@ def add_rollout_arguments(parser: argparse.ArgumentParser) -> None:
         help="groups of ROLE that must keep serving during every step (repeatable)",
     )
     parser.add_argument(
+        "--allow-outage",
+        action="store_true",
+        help="accept a step that leaves a role with no group serving (a role of one group, maxSurge 0)",
+    )
+    parser.add_argument(
         "--pool-label",
         default=POOL_LABEL,
         metavar="LABEL",
@@ -110,7 +115,13 @@ def rollout_plan(ctx: Context) -> RolloutPlan:
     # blocking; an instance llmd stood up was planned with the same acknowledgements as before.
     plan = plan_from_args(ctx, kube, label=not imported)
     preflight(kube, plan, existing="import" if imported else "rollout")
-    return plan_rollout(kube, plan, floors=_floors(ctx.args.floor), pool_label=ctx.args.pool_label)
+    return plan_rollout(
+        kube,
+        plan,
+        floors=_floors(ctx.args.floor),
+        pool_label=ctx.args.pool_label,
+        allow_outage=ctx.args.allow_outage,
+    )
 
 
 def command_rollouts(ctx: Context) -> int:
