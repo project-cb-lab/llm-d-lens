@@ -26,4 +26,11 @@ This repository is a monorepo with two components that share a single backend co
 
 ```bash
 git clone git@github.com:project-cb-lab/llm-d-lens.git
+cd llm-d-lens
+python3 -m venv .venv
+.venv/bin/pip install -e ./cli
+.venv/bin/llmd --help
 ```
+
+The CLI plans, stands up, imports, rolls out in place, and removes curvebender-tools stacks inside one
+namespace; see [`cli/README.md`](cli/README.md).

@@ -170,6 +170,12 @@ def command_rollouts(ctx: Context) -> int:
 
 def command_start(ctx: Context) -> int:
     args = ctx.args
+    if args.context and args.drain:
+        # The drain command runs its own oc/kubectl, which reads the kubeconfig's current context.
+        raise UsageError(
+            "--context is not passed to the drain command",
+            hint=f"Select the cluster for both with `kubectl config use-context {args.context}`.",
+        )
     rollout = rollout_plan(ctx)
     if rollout.blocking:
         print_rollout_plan(rollout) if args.output == "text" else ctx.emit(rollout.summary())

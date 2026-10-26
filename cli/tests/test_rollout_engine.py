@@ -167,3 +167,11 @@ def git_commit(repo):
     from .conftest import git
 
     git(repo, "commit", "-q", "-am", "privileged")
+
+
+def test_a_drain_command_with_another_context_is_refused(rollrepo, cluster, tmp_path, capsys, monkeypatch):  # noqa: F811
+    monkeypatch.setattr("llmd.commands.RUNNER", cluster)
+    new_image(rollrepo)
+    argv = ["--state-dir", str(tmp_path), "rollouts", "start", STACK, "--source", str(rollrepo), "-n", NS]
+    assert main([*argv, "--name", "pd", "--context", "other", "--drain", DRAIN]) == 2
+    assert "use-context other" in capsys.readouterr().err
