@@ -6,6 +6,7 @@ Other tools (git, kustomize) run for real, so rendering is tested end to end.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import uuid
 
@@ -35,6 +36,7 @@ DEFAULT_SERVED = {
     "scheduling.k8s.io/v1": {"PriorityClass": ("priorityclasses", False)},
     "leaderworkerset.x-k8s.io/v1": {"LeaderWorkerSet": ("leaderworkersets", True)},
     "disaggregatedset.x-k8s.io/v1": {"DisaggregatedSet": ("disaggregatedsets", True)},
+    "k8s.cni.cncf.io/v1": {"NetworkAttachmentDefinition": ("network-attachment-definitions", True)},
 }
 
 
@@ -73,6 +75,9 @@ class FakeCluster:
         #: Act as the workload controllers: after each change, give every Deployment and
         #: DisaggregatedSet exactly its pods, Ready, labelled the way the controllers label them.
         self.controllers = True
+        #: (old LeaderWorkerSet, new replicas) -> allowed? Stands in for an admission policy that
+        #: holds the controller's scale-down until a group is drained.
+        self.refuse_scale_down = None
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -108,41 +113,172 @@ class FakeCluster:
         return sorted(name for ns, kind, name in self.objects if ns == namespace and kind == canonical)
 
     def settle(self) -> None:
-        """Make the pods of every Deployment and DisaggregatedSet match its spec."""
+        """Make the pods of every Deployment match its spec, and bring every DisaggregatedSet that is
+        not rolling to its replicas (a roll moves only through :meth:`roll_step`)."""
         for (namespace, resource, name), document in list(self.objects.items()):
             spec = document.get("spec") or {}
             if resource == "deployments.apps":
                 labels = dict(((spec.get("template") or {}).get("metadata") or {}).get("labels") or {})
-                self._pods(
-                    namespace,
-                    f"{name}-",
-                    int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1),
-                    labels,
-                )
+                replicas = int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)
+                self._pods(namespace, f"{name}-", replicas, labels)
             elif resource.startswith("disaggregatedsets."):
-                for role in spec.get("roles") or []:
-                    role_spec = role.get("spec") or {}
-                    template = role_spec.get("leaderWorkerTemplate") or {}
-                    size = int(template.get("size") or 1)
-                    labels = dict(
-                        ((template.get("workerTemplate") or {}).get("metadata") or {}).get("labels") or {}
-                    )
-                    revision = document["metadata"].get("annotations", {}).get("fake/revision", "r0")
-                    labels.update(
-                        {
-                            "disaggregatedset.x-k8s.io/name": name,
-                            "disaggregatedset.x-k8s.io/role": role["name"],
-                            "disaggregatedset.x-k8s.io/revision": revision,
-                            "leaderworkerset.sigs.k8s.io/name": f"{name}-{revision}-{role['name']}",
-                        }
-                    )
-                    self._pods(
-                        namespace,
-                        f"{name}-{role['name']}-",
-                        int(role_spec.get("replicas") or 0) * size,
-                        labels,
-                        size,
-                    )
+                self._reconcile_set(namespace, document)
+
+    # -- the DisaggregatedSet controller (lws) -------------------------------------------------------
+    @staticmethod
+    def revision(document: dict) -> str:
+        """lws hashes each role's name and leaderWorkerTemplate into the revision."""
+        roles = [
+            (role["name"], (role.get("spec") or {}).get("leaderWorkerTemplate"))
+            for role in document["spec"]["roles"]
+        ]
+        return hashlib.sha256(json.dumps(roles, sort_keys=True).encode()).hexdigest()[:8]
+
+    def _sets(self, namespace: str, name: str) -> list[dict]:
+        found = [
+            item
+            for (ns, resource, _), item in self.objects.items()
+            if ns == namespace
+            and resource.startswith("leaderworkersets.")
+            and item["metadata"]["labels"].get("disaggregatedset.x-k8s.io/name") == name
+        ]
+        return sorted(found, key=lambda item: item["metadata"]["creationTimestamp"])
+
+    def _set(self, namespace: str, name: str, role: dict, revision: str, replicas: int) -> dict:
+        lws_name = f"{name}-{revision}-{role['name']}"
+        key = (namespace, "leaderworkersets.leaderworkerset.x-k8s.io", lws_name)
+        current = self.objects.get(key)
+        if current is None:
+            self._version += 1
+            current = {
+                "apiVersion": "leaderworkerset.x-k8s.io/v1",
+                "kind": "LeaderWorkerSet",
+                "metadata": {
+                    "name": lws_name,
+                    "namespace": namespace,
+                    "uid": uuid.uuid4().hex,
+                    "creationTimestamp": f"2026-01-01T00:00:{self._version:05d}Z",
+                    "labels": {
+                        "disaggregatedset.x-k8s.io/name": name,
+                        "disaggregatedset.x-k8s.io/role": role["name"],
+                        "disaggregatedset.x-k8s.io/revision": revision,
+                    },
+                },
+                "spec": {
+                    "replicas": 0,
+                    "leaderWorkerTemplate": copy.deepcopy(role["spec"]["leaderWorkerTemplate"]),
+                },
+            }
+            self.objects[key] = current
+        current["spec"]["replicas"] = replicas
+        self._lws_pods(namespace, current, name, role)
+        return current
+
+    def _lws_pods(self, namespace: str, lws: dict, name: str, role: dict) -> None:
+        template = lws["spec"]["leaderWorkerTemplate"]
+        size = int(template.get("size") or 1)
+        labels = dict(((template.get("workerTemplate") or {}).get("metadata") or {}).get("labels") or {})
+        revision = lws["metadata"]["labels"]["disaggregatedset.x-k8s.io/revision"]
+        labels.update(
+            {
+                "disaggregatedset.x-k8s.io/name": name,
+                "disaggregatedset.x-k8s.io/role": role["name"],
+                "disaggregatedset.x-k8s.io/revision": revision,
+                "leaderworkerset.sigs.k8s.io/name": lws["metadata"]["name"],
+            }
+        )
+        self._pods(namespace, f"{lws['metadata']['name']}-", lws["spec"]["replicas"] * size, labels, size)
+
+    def _reconcile_set(self, namespace: str, document: dict) -> None:
+        name, target = document["metadata"]["name"], self.revision(document)
+        sets = self._sets(namespace, name)
+        if any(item["metadata"]["labels"]["disaggregatedset.x-k8s.io/revision"] != target for item in sets):
+            return  # a roll is in progress; roll_step moves it
+        for role in document["spec"]["roles"]:
+            self._set(namespace, name, role, target, int(role["spec"].get("replicas") or 0))
+
+    def roll_step(self, namespace: str, name: str) -> bool:
+        """One step of lws v0.9's in-place roll (maxSurge 0), per role: raise the new revision's
+        LeaderWorkerSet by up to maxUnavailable groups, then lower the old one by as many. The new
+        groups stay Pending (no free nodes) until the old ones are gone. A lowering an admission
+        policy refuses (``self.refuse_scale_down``) holds that role. Returns whether any old group
+        was removed; once every old set is at 0, the old sets are deleted."""
+        document = self.objects[(namespace, "disaggregatedsets.disaggregatedset.x-k8s.io", name)]
+        target = self.revision(document)
+        moved = False
+        for role in document["spec"]["roles"]:
+            spec = role["spec"]
+            replicas = int(spec.get("replicas") or 0)
+            config = ((spec.get("rolloutStrategy") or {}).get("rollingUpdateConfiguration")) or {}
+            unavailable = int(config.get("maxUnavailable", 1))
+            olds = [
+                item
+                for item in self._sets(namespace, name)
+                if item["metadata"]["labels"]["disaggregatedset.x-k8s.io/role"] == role["name"]
+                and item["metadata"]["labels"]["disaggregatedset.x-k8s.io/revision"] != target
+                and item["spec"]["replicas"] > 0
+            ]
+            remaining = sum(item["spec"]["replicas"] for item in olds)
+            raised = min(replicas, replicas - remaining + unavailable) if olds else replicas
+            new = self._set(
+                namespace,
+                name,
+                role,
+                target,
+                max(raised, self._replicas(namespace, name, role["name"], target)),
+            )
+            if not olds:
+                continue
+            old = olds[-1]
+            lowered = max(old["spec"]["replicas"] - unavailable, 0)
+            if self.refuse_scale_down and not self.refuse_scale_down(old, lowered):
+                self._pending(namespace, new, replicas - remaining)
+                continue
+            self._lower(namespace, old, lowered, name, role)
+            moved = True
+        if all(
+            item["spec"]["replicas"] == 0
+            for item in self._sets(namespace, name)
+            if item["metadata"]["labels"]["disaggregatedset.x-k8s.io/revision"] != target
+        ):
+            for item in self._sets(namespace, name):
+                if item["metadata"]["labels"]["disaggregatedset.x-k8s.io/revision"] != target:
+                    del self.objects[
+                        (namespace, "leaderworkersets.leaderworkerset.x-k8s.io", item["metadata"]["name"])
+                    ]
+        return moved
+
+    def _pending(self, namespace: str, lws: dict, schedulable: int) -> None:
+        """The new set's groups from ``schedulable`` on have no nodes: their pods are Pending."""
+        for key, pod in self.objects.items():
+            if key[0] != namespace or key[1] != "pods":
+                continue
+            pod_labels = pod["metadata"]["labels"]
+            if pod_labels.get("leaderworkerset.sigs.k8s.io/name") != lws["metadata"]["name"]:
+                continue
+            if int(pod_labels["leaderworkerset.sigs.k8s.io/group-index"]) >= schedulable:
+                pod["status"] = {
+                    "phase": "Pending",
+                    "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable"}],
+                }
+
+    def _lower(self, namespace: str, lws: dict, replicas: int, name: str, role: dict) -> None:
+        lws["spec"]["replicas"] = replicas
+        self._lws_pods(
+            namespace,
+            lws,
+            name,
+            {"name": role["name"], "spec": {"leaderWorkerTemplate": lws["spec"]["leaderWorkerTemplate"]}},
+        )
+        for key, pod in self.objects.items():  # the freed nodes take the new groups
+            if key[0] == namespace and key[1] == "pods" and pod["status"].get("phase") == "Pending":
+                pod["status"] = {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}
+
+    def _replicas(self, namespace: str, name: str, role: str, revision: str) -> int:
+        item = self.objects.get(
+            (namespace, "leaderworkersets.leaderworkerset.x-k8s.io", f"{name}-{revision}-{role}")
+        )
+        return item["spec"]["replicas"] if item else 0
 
     def _orphans(self, namespace: str, removed: dict) -> None:
         """Pods of a deleted workload go with it (garbage collection)."""
