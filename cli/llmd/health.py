@@ -7,6 +7,10 @@ llmd stood up and stacks deployed with ``oc apply`` or Helm.
 
 A DisaggregatedSet is judged by its pods: every role must run ``replicas x group size``
 pods, all Ready, none terminating. Its controller writes no status before lws v0.11.
+
+An endpoint picker (EPP) with leader election passes its readiness check only while it
+holds the lease, so one replica is Ready and the others are standbys that never are; its
+Deployment is ready once one replica is.
 """
 
 from __future__ import annotations
@@ -75,6 +79,20 @@ def _conditions(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {
         c.get("type"): c for c in (item.get("status") or {}).get("conditions") or [] if isinstance(c, dict)
     }
+
+
+#: The endpoint picker's flag for leader election (llm-d-router).
+LEADER_ELECTION_FLAG = "--ha-enable-leader-election"
+
+
+def leader_elected(item: dict[str, Any]) -> bool:
+    """Whether a Deployment runs replicas of which only the lease holder is ever Ready."""
+    template = ((item.get("spec") or {}).get("template") or {}).get("spec") or {}
+    for container in template.get("containers") or []:
+        for arg in [*(container.get("command") or []), *(container.get("args") or [])]:
+            if arg in (LEADER_ELECTION_FLAG, f"{LEADER_ELECTION_FLAG}=true"):
+                return True
+    return False
 
 
 def _generation_observed(item: dict[str, Any]) -> bool:
@@ -146,6 +164,10 @@ def evaluate(item: dict[str, Any] | None, pods: list[dict[str, Any]]) -> tuple[s
         updated = int(status.get("updatedReplicas") or 0)
         if _generation_observed(item) and ready >= desired and updated >= desired and current <= desired:
             return "ready", f"{ready}/{desired} ready"
+        if kind == "Deployment" and leader_elected(item):
+            rolled = _generation_observed(item) and updated >= desired and current <= desired
+            if rolled and ready >= 1:
+                return "ready", f"{ready}/{desired} ready (leader elected; the others stand by)"
         return "progressing", f"{ready}/{desired} ready"
     if kind == "Job":
         if (conditions.get("Complete") or {}).get("status") == "True":
