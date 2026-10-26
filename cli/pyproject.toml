@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-d-lens-cli"
+version = "0.1.0"
+description = "Plan, stand up, roll out, and remove curvebender-tools stacks inside one Kubernetes namespace"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+llmd = "llmd.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["llmd*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
