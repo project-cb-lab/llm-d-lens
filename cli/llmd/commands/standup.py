@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import sys
 
 from .. import lifecycle
 from ..errors import PolicyError
 from ..preflight import preflight
+from ..status import wait_ready
 from . import Context, Handler
 from .plan import add_plan_arguments, plan_from_args, print_plan
 
@@ -22,6 +24,8 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
         metavar="DIGEST",
         help="refuse unless the plan still has this digest (from a reviewed `llmd plan`)",
     )
+    parser.add_argument("--wait", action="store_true", help="wait until every object and pod is Ready")
+    parser.add_argument("--timeout", type=int, default=1800, help="--wait timeout in seconds")
     return {"standup": command_standup}
 
 
@@ -38,6 +42,14 @@ def command_standup(ctx: Context) -> int:
     result = lifecycle.standup(
         kube, plan, expected_digest=ctx.args.expected_digest, actor=plan.cluster.get("user", "")
     )
+    if ctx.args.wait:
+        result["status"] = wait_ready(
+            kube,
+            plan.namespace,
+            plan.instance,
+            timeout=ctx.args.timeout,
+            emit=lambda line: print(f"[wait] {line}", file=sys.stderr, flush=True),
+        )
     if ctx.args.output != "text":
         ctx.emit(result)
         return 0

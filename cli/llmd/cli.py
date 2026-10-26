@@ -17,6 +17,7 @@ from .commands import render as render_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .commands import standup as standup_command
+from .commands import status as status_command
 from .errors import LlmdError
 
 EXAMPLES = """\
@@ -28,11 +29,20 @@ examples:
   llmd render manifests/production/<model>/<cluster>           # the objects, as `oc apply -k` sends them
   llmd plan manifests/production/<model>/<cluster> -n <namespace> --offline
   llmd plan manifests/production/<model>/<cluster>             # namespace from the kube context
-  llmd standup manifests/production/<model>/<cluster> --expected-digest <digest from plan>
+  llmd standup manifests/production/<model>/<cluster> --expected-digest <digest from plan> --wait
+  llmd list
+  llmd status <instance>
 """
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
-COMMAND_MODULES = [sources_command, stacks_command, render_command, plan_command, standup_command]
+COMMAND_MODULES = [
+    sources_command,
+    stacks_command,
+    render_command,
+    plan_command,
+    standup_command,
+    status_command,
+]
 
 
 def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Handler]]:

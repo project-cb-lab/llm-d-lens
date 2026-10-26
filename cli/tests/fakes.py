@@ -70,6 +70,9 @@ class FakeCluster:
         self.objects: dict[tuple[str, str, str], dict] = {}
         self.calls: list[list[str]] = []
         self._version = 0
+        #: Act as the workload controllers: after each change, give every Deployment and
+        #: DisaggregatedSet exactly its pods, Ready, labelled the way the controllers label them.
+        self.controllers = True
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -103,6 +106,68 @@ class FakeCluster:
     def names(self, namespace: str, resource: str) -> list[str]:
         canonical = self._canonical(resource)
         return sorted(name for ns, kind, name in self.objects if ns == namespace and kind == canonical)
+
+    def settle(self) -> None:
+        """Make the pods of every Deployment and DisaggregatedSet match its spec."""
+        for (namespace, resource, name), document in list(self.objects.items()):
+            spec = document.get("spec") or {}
+            if resource == "deployments.apps":
+                labels = dict(((spec.get("template") or {}).get("metadata") or {}).get("labels") or {})
+                self._pods(
+                    namespace,
+                    f"{name}-",
+                    int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1),
+                    labels,
+                )
+            elif resource.startswith("disaggregatedsets."):
+                for role in spec.get("roles") or []:
+                    role_spec = role.get("spec") or {}
+                    template = role_spec.get("leaderWorkerTemplate") or {}
+                    size = int(template.get("size") or 1)
+                    labels = dict(
+                        ((template.get("workerTemplate") or {}).get("metadata") or {}).get("labels") or {}
+                    )
+                    revision = document["metadata"].get("annotations", {}).get("fake/revision", "r0")
+                    labels.update(
+                        {
+                            "disaggregatedset.x-k8s.io/name": name,
+                            "disaggregatedset.x-k8s.io/role": role["name"],
+                            "disaggregatedset.x-k8s.io/revision": revision,
+                            "leaderworkerset.sigs.k8s.io/name": f"{name}-{revision}-{role['name']}",
+                        }
+                    )
+                    self._pods(
+                        namespace,
+                        f"{name}-{role['name']}-",
+                        int(role_spec.get("replicas") or 0) * size,
+                        labels,
+                        size,
+                    )
+
+    def _orphans(self, namespace: str, removed: dict) -> None:
+        """Pods of a deleted workload go with it (garbage collection)."""
+        name = removed["metadata"]["name"]
+        for key in [key for key in self.objects if key[0] == namespace and key[1] == "pods"]:
+            if key[2].startswith(f"{name}-"):
+                del self.objects[key]
+
+    def _pods(self, namespace: str, prefix: str, want: int, labels: dict, size: int = 1) -> None:
+        have = sorted(
+            key
+            for key in self.objects
+            if key[0] == namespace and key[1] == "pods" and key[2].startswith(prefix)
+        )
+        for key in have[want:]:
+            del self.objects[key]
+        for index in range(len(have), want):
+            pod_labels = {**labels, "leaderworkerset.sigs.k8s.io/group-index": str(index // size)}
+            pod = {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": f"{prefix}{index}", "labels": pod_labels},
+                "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+            }
+            self.put(namespace, pod)
 
     def _bump(self, document: dict) -> None:
         self._version += 1
@@ -217,6 +282,8 @@ class FakeCluster:
                 self._bump(merged)
                 self.objects[key] = merged
             out.append(merged)
+        if self.controllers and not dry_run:
+            self.settle()
         return _ok("\n".join(json.dumps(item) for item in out))
 
     def _selected(self, document: dict, selector: str) -> bool:
@@ -252,4 +319,6 @@ class FakeCluster:
         if ("delete", resource) in self.denied:
             return _fail(f'Error from server (Forbidden): {resource} is forbidden: User "{self.user}"')
         removed = self.objects.pop((namespace, resource, args[2]), None)
+        if self.controllers and removed:
+            self._orphans(namespace, removed)
         return _ok(f'{resource} "{args[2]}" deleted\n' if removed else "")
