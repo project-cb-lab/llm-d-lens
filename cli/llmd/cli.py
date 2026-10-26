@@ -7,24 +7,26 @@ directory). `llmd plan` shows what `llmd standup` would change, without changing
 from __future__ import annotations
 
 import argparse
-import json
+import os
 import sys
-from collections.abc import Callable
-from typing import Any
 
-from . import __version__, yamlio
+from . import __version__
+from .commands import Context, Handler
+from .commands import sources as sources_command
 from .errors import LlmdError
 
 EXAMPLES = """\
 examples:
-  llmd --version
+  llmd sources add cb https://github.com/project-cb-lab/curvebender-tools.git#main
+  llmd sources add cb-local /path/to/curvebender-tools
+  llmd sources list
 """
 
-#: command name -> handler(args) returning the exit code. Each command module registers itself.
-Command = Callable[[argparse.Namespace], int]
+#: Modules that add subcommands, in the order ``--help`` lists them.
+COMMAND_MODULES = [sources_command]
 
 
-def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Command]]:
+def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Handler]]:
     parser = argparse.ArgumentParser(
         prog="llmd",
         description=__doc__,
@@ -33,25 +35,26 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Command]]:
     )
     parser.add_argument("--version", action="version", version=f"llmd {__version__}")
     parser.add_argument("-o", "--output", choices=["text", "json", "yaml"], default="text")
-    parser.add_subparsers(dest="command", metavar="COMMAND")
-    return parser, {}
-
-
-def emit_value(value: Any, output: str) -> None:
-    if output == "json":
-        print(json.dumps(value, indent=2, sort_keys=True, default=str))
-    else:
-        print(yamlio.dump(value), end="")
+    parser.add_argument(
+        "--state-dir",
+        default=os.environ.get("LLMD_STATE_DIR", ""),
+        help="local state directory: registered sources (env LLMD_STATE_DIR)",
+    )
+    commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+    handlers: dict[str, Handler] = {}
+    for module in COMMAND_MODULES:
+        handlers.update(module.register(commands))
+    return parser, handlers
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser, commands = build_parser()
+    parser, handlers = build_parser()
     args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     if not args.command:
         parser.print_help()
         return 2
     try:
-        return commands[args.command](args)
+        return handlers[args.command](Context(args))
     except LlmdError as error:
         print(f"error: {error.message}", file=sys.stderr)
         if error.hint:
