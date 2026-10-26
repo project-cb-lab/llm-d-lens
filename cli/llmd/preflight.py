@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import replace
 from typing import Any
 
 from . import inventory
@@ -52,7 +53,9 @@ def preflight(kube: Kube, plan: Plan, *, existing: str = "refuse") -> None:
         return
     if not _check_apis(kube, plan):
         return
-    _check_permissions(kube, plan)
+    if existing == "import":
+        _observe_only(plan)
+    _check_permissions(kube, plan, write=existing != "import")
     _check_prerequisites(kube, plan)
     _check_existing(kube, plan, existing)
     if plan.blocking or existing == "import":
@@ -91,10 +94,28 @@ def resources(kube: Kube, plan: Plan) -> list[str]:
     return [kube.resource_name(doc) for doc in plan.documents]
 
 
-def _check_permissions(kube: Kube, plan: Plan) -> None:
+#: Findings that guard what an apply would create. An import applies nothing, so for an import
+#: they describe the running stack and do not block.
+APPLY_ONLY = {"privileged", "host-path", "host-namespace", "scc-binding", "cluster-scoped"}
+
+
+def _observe_only(plan: Plan) -> None:
+    plan.policy.findings[:] = [
+        replace(finding, severity="info") if finding.code in APPLY_ONLY else finding
+        for finding in plan.findings
+    ]
+
+
+def _check_permissions(kube: Kube, plan: Plan, *, write: bool = True) -> None:
+    """What the user must be allowed: for a standup, to change every kind the plan applies; for an
+    import, only to read them and to write the instance's record (a ConfigMap)."""
     names = sorted({*resources(kube, plan), "configmaps"})
-    checks = [(verb, name, "error") for name in names for verb in ("get", "list", "create", "patch")]
-    checks += [("delete", name, "warning") for name in names]
+    if write:
+        checks = [(verb, name, "error") for name in names for verb in ("get", "list", "create", "patch")]
+        checks += [("delete", name, "warning") for name in names]
+    else:
+        checks = [(verb, name, "error") for name in names for verb in ("get", "list")]
+        checks += [(verb, "configmaps", "error") for verb in ("create", "patch")]
     checks += [("get", "pods", "error"), ("list", "pods", "error")]
     reviews = [
         (verb, name.partition(".")[2], name.partition(".")[0], plan.namespace) for verb, name, _ in checks

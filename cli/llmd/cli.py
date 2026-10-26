@@ -12,6 +12,7 @@ import sys
 
 from . import __version__
 from .commands import Context, Handler
+from .commands import importing as import_command
 from .commands import plan as plan_command
 from .commands import render as render_command
 from .commands import sources as sources_command
@@ -31,6 +32,8 @@ examples:
   llmd plan manifests/production/<model>/<cluster> -n <namespace> --offline
   llmd plan manifests/production/<model>/<cluster>             # namespace from the kube context
   llmd standup manifests/production/<model>/<cluster> --expected-digest <digest from plan> --wait
+  llmd import manifests/production/<model>/<cluster> --dry-run   # a stack deployed with `oc apply -k`
+  llmd import manifests/production/<model>/<cluster>             # record it; nothing on it changes
   llmd list
   llmd status <instance>
   llmd teardown <instance>
@@ -43,6 +46,7 @@ COMMAND_MODULES = [
     render_command,
     plan_command,
     standup_command,
+    import_command,
     status_command,
     teardown_command,
 ]
