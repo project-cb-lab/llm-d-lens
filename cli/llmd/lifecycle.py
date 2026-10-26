@@ -99,3 +99,65 @@ def _prune(kube: Kube, namespace: str, instance: str, stale: list[dict[str, Any]
             kube.delete(item["resource"], item["name"], namespace)
             pruned.append(f"{item['kind']}/{item['name']}")
     return pruned
+
+
+def teardown(
+    kube: Kube, namespace: str, instance: str, *, delete_volumes: bool = False, forget: bool = False
+) -> dict[str, Any]:
+    """Delete what the instance owns, newest first, and its record.
+
+    An object is deleted only while its UID is the recorded one (and, for objects llmd applied,
+    while it still carries the instance's labels); anything else is skipped and reported.
+    ``forget`` deletes only the record: the objects stay as they are, unmanaged."""
+    record = inventory.require(kube, namespace, instance)
+    imported = inventory.management(record) == inventory.IMPORTED
+    if forget:
+        kube.delete("configmaps", inventory.inventory_name(instance), namespace)
+        return {
+            "instance": instance,
+            "namespace": namespace,
+            "deleted": [],
+            "kept": [],
+            "skipped": [],
+            "forgot": True,
+        }
+    targets = [item for item in record["objects"] if delete_volumes or item["kind"] not in KEPT_KINDS]
+    kept = [item for item in record["objects"] if item not in targets]
+    names = sorted({item["resource"] for item in targets} | {"configmaps"})
+    answers = kube.access_reviews([("delete", *_split(name), namespace) for name in names])
+    denied = [name for name, allowed in zip(names, answers, strict=True) if allowed is False]
+    if denied:
+        raise PolicyError(
+            f"you cannot delete {', '.join(denied)} in {namespace}; nothing was removed",
+            hint="Ask a namespace administrator for the missing permission.",
+        )
+    inventory.write(kube, {**record, "phase": "Deleting"})
+    deleted, skipped = [], []
+    for item in reversed(targets):
+        ref = f"{item['kind']}/{item['name']}"
+        live = kube.get(item["resource"], item["name"], namespace)
+        if live is None:
+            continue
+        same = not item.get("uid") or live["metadata"].get("uid") == item["uid"]
+        if not same or (not imported and not _owned(live, instance)):
+            skipped.append(ref)
+            continue
+        kube.delete(item["resource"], item["name"], namespace)
+        deleted.append(ref)
+    if kept:
+        inventory.write(kube, {**record, "phase": "Removed", "objects": kept})
+    else:
+        kube.delete("configmaps", inventory.inventory_name(instance), namespace)
+    return {
+        "instance": instance,
+        "namespace": namespace,
+        "deleted": deleted,
+        "kept": [f"{item['kind']}/{item['name']}" for item in kept],
+        "skipped": skipped,
+    }
+
+
+def _split(resource: str) -> tuple[str, str]:
+    """``plural.group`` -> (group, plural)."""
+    plural, _, group = resource.partition(".")
+    return group, plural
