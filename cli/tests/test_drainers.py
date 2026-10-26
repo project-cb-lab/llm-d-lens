@@ -40,10 +40,15 @@ def test_drainers_start_log_and_stop(tmp_path):
     drainers = Drainers(tmp_path / "rollout")
     script = "import sys, time; print('draining', sys.argv[1], flush=True); time.sleep(60)"
     planned = [
-        Drainer(role, [sys.executable, "-c", script, role], tmp_path / "rollout" / f"drain-{role}.log")
+        Drainer(
+            role,
+            [sys.executable, "-c", script, role],
+            tmp_path / "rollout" / f"drain-{role}.log",
+            str(tmp_path),
+        )
         for role in ("prefill", "decode")
     ]
-    started = drainers.start(planned, cwd=tmp_path)
+    started = drainers.start(planned)
     assert all(item.pid for item in started) and len(drainers.running()) == 2
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and not tail(started[0].log):
@@ -59,9 +64,7 @@ def test_drainers_start_log_and_stop(tmp_path):
 
 def test_a_drainer_that_exits_is_reported(tmp_path):
     drainers = Drainers(tmp_path)
-    [started] = drainers.start(
-        [Drainer("decode", [sys.executable, "-c", "pass"], tmp_path / "d.log")], cwd=tmp_path
-    )
+    [started] = drainers.start([Drainer("decode", [sys.executable, "-c", "pass"], tmp_path / "d.log")])
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and alive(started.pid):
         time.sleep(0.05)

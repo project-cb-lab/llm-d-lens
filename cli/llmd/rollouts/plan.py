@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import inventory
-from ..errors import PolicyError
+from ..errors import ConflictError, PolicyError
 from ..kube import Kube
 from ..model import Finding, object_ref
 from ..plan import Plan
@@ -83,6 +83,12 @@ class RolloutPlan:
 
 def plan_rollout(kube: Kube, plan: Plan, *, floors: dict[str, int], pool_label: str = "") -> RolloutPlan:
     record = inventory.require(kube, plan.namespace, plan.instance)
+    phase = (record.get("rollout") or {}).get("phase")
+    if phase in ("Rolling", "Paused", "Aborting"):
+        raise ConflictError(
+            f"instance {plan.instance} already has a rollout in progress ({phase})",
+            hint=f"Follow it with `llmd rollouts status {plan.instance}`; finish or abort it first.",
+        )
     if record["stack"]["id"] != plan.stack.id:
         raise PolicyError(
             f"instance {plan.instance} runs stack {record['stack']['id']}, not {plan.stack.id}",

@@ -31,6 +31,8 @@ class Drainer:
     role: str
     argv: list[str]
     log: Path
+    #: Where it runs: the source checkout the rollout renders from.
+    cwd: str = ""
     pid: int = 0
 
     def describe(self) -> dict[str, Any]:
@@ -64,16 +66,14 @@ class Drainers:
     def save(self, drainers: list[Drainer]) -> None:
         write_json_atomic(self.path, [{**vars(item), "log": str(item.log)} for item in drainers])
 
-    def start(
-        self, drainers: list[Drainer], *, cwd: Path, env: dict[str, str] | None = None
-    ) -> list[Drainer]:
+    def start(self, drainers: list[Drainer], *, env: dict[str, str] | None = None) -> list[Drainer]:
         self.directory.mkdir(parents=True, exist_ok=True)
         started = []
         for drainer in drainers:
             log = open(drainer.log, "a", encoding="utf-8")  # noqa: SIM115 - the child keeps it open
             process = subprocess.Popen(  # noqa: S603 - the user's own --drain command, never a shell
                 drainer.argv,
-                cwd=str(cwd),
+                cwd=drainer.cwd or None,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -81,7 +81,7 @@ class Drainers:
                 start_new_session=True,
             )
             log.close()
-            started.append(Drainer(drainer.role, drainer.argv, drainer.log, process.pid))
+            started.append(Drainer(drainer.role, drainer.argv, drainer.log, drainer.cwd, process.pid))
         self.save(started)
         return started
 
@@ -97,7 +97,7 @@ class Drainers:
                 except ProcessLookupError:
                     continue
                 stopped.append(drainer)
-        self.save([Drainer(item.role, item.argv, item.log, 0) for item in self.load()])
+        self.save([Drainer(item.role, item.argv, item.log, item.cwd) for item in self.load()])
         return stopped
 
     def exited(self) -> list[Drainer]:
