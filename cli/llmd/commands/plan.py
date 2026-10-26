@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 from .. import catalog, yamlio
 from ..errors import PolicyError
+from ..kube import Kube
 from ..plan import Options, Plan, make_plan
-from . import Context, Handler, add_source_arguments
+from ..policy import fallback_scope
+from ..preflight import preflight
+from . import Context, Handler, add_source_arguments, add_target_arguments
 
 
 def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     """The arguments every command that plans a stack takes."""
     parser.add_argument("stack", help="path of the stack in the source (see `llmd stacks`)")
     add_source_arguments(parser)
-    parser.add_argument(
-        "-n",
-        "--namespace",
-        default=os.environ.get("LLMD_NAMESPACE", ""),
-        help="target namespace (env LLMD_NAMESPACE)",
-    )
+    add_target_arguments(parser)
     parser.add_argument("--name", default="", help="instance name (default: from the stack's path)")
     parser.add_argument(
         "--allow-privileged",
@@ -45,20 +42,34 @@ def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
     return {"plan": command_plan}
 
 
-def plan_from_args(ctx: Context) -> Plan:
+def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Plan:
+    """The plan the command line asks for. With ``kube``, API discovery says which kinds are
+    cluster-scoped and the namespace may come from the kube context; without, the plan is offline."""
     args = ctx.args
     stack = catalog.find_stack(ctx.source(), args.stack)
     options = Options(
-        namespace=args.namespace,
+        namespace=ctx.namespace(kube),
         instance=args.name or catalog.default_name(stack),
         allow_privileged=args.allow_privileged,
         skip_admin_parts=args.skip_admin_parts,
     )
-    return make_plan(stack, options, runner=ctx.runner)
+    scope = fallback_scope if kube is None else _discovered_scope(kube)
+    return make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)
+
+
+def _discovered_scope(kube: Kube):
+    def scope(api_version: str, kind: str) -> bool | None:
+        served = kube.scope(api_version, kind)
+        return fallback_scope(api_version, kind) if served is None else served
+
+    return scope
 
 
 def command_plan(ctx: Context) -> int:
-    plan = plan_from_args(ctx)
+    kube = None if ctx.args.offline else ctx.kube()
+    plan = plan_from_args(ctx, kube)
+    if kube is not None:
+        preflight(kube, plan)
     if ctx.args.manifest:
         yamlio.write_text_atomic(Path(ctx.args.manifest), yamlio.dump_documents(plan.documents))
     if ctx.args.admin_yaml:

@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .. import paths, yamlio
+from ..kube import Kube, Target
+from ..model import validate_namespace
 from ..process import Runner, subprocess_runner
 from ..sources import Source, SourceRegistry, resolve_source
 
@@ -45,6 +48,20 @@ class Context:
             spec, registry=self.registry, runner=self.runner, refresh=getattr(self.args, "refresh", False)
         )
 
+    def kube(self) -> Kube:
+        args = self.args
+        target = Target(
+            kubeconfig=getattr(args, "kubeconfig", ""),
+            context=getattr(args, "context", ""),
+            cli=getattr(args, "kube_cli", "kubectl"),
+        )
+        return Kube(target, runner=self.runner)
+
+    def namespace(self, kube: Kube | None = None) -> str:
+        """``-n``, else ``LLMD_NAMESPACE`` (the flag's default), else the kube context's namespace."""
+        namespace = getattr(self.args, "namespace", "") or (kube.default_namespace() if kube else "")
+        return validate_namespace(namespace)
+
     def emit(self, value: Any) -> None:
         emit_value(value, self.args.output)
 
@@ -68,3 +85,19 @@ def add_source_arguments(parser: argparse.ArgumentParser) -> None:
         "(optional when exactly one source is registered)",
     )
     parser.add_argument("--refresh", action="store_true", help="fetch a remote source again")
+
+
+def add_target_arguments(parser: argparse.ArgumentParser) -> None:
+    """Which cluster and namespace a command talks to."""
+    parser.add_argument(
+        "-n",
+        "--namespace",
+        default=os.environ.get("LLMD_NAMESPACE", ""),
+        help="target namespace (default: $LLMD_NAMESPACE, then the kube context's namespace)",
+    )
+    connection = parser.add_argument_group("connection")
+    connection.add_argument("--kubeconfig", default="", help="kubeconfig file (default: kubectl's own)")
+    connection.add_argument("--context", default="", help="kube context")
+    connection.add_argument(
+        "--kube-cli", default=os.environ.get("LLMD_KUBE_CLI", "kubectl"), choices=["kubectl", "oc"]
+    )

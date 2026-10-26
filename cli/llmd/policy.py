@@ -96,11 +96,12 @@ WORKLOAD_KINDS = {
     "DisaggregatedSet",
 }
 
-#: (group, kind) -> True when namespaced, False when cluster-scoped, None when unknown.
+#: (apiVersion, kind) -> True when namespaced, False when cluster-scoped, None when unknown.
 ScopeResolver = Callable[[str, str], bool | None]
 
 
-def fallback_scope(group: str, kind: str) -> bool | None:
+def fallback_scope(api_version: str, kind: str) -> bool | None:
+    group = api_group(api_version)
     if (group, kind) in CLUSTER_SCOPED or (group, "*") in CLUSTER_SCOPED:
         return False
     if (group, kind) in NAMESPACED_BUILTINS:
@@ -230,7 +231,7 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
             findings.append(Finding("error", "duplicate-object", f"{ref} is defined twice", object=ref))
             continue
         seen.add(identity)
-        if context.scope(group, kind) is False:
+        if context.scope(document["apiVersion"], kind) is False:
             if kind == "Namespace":
                 findings.append(
                     Finding(
