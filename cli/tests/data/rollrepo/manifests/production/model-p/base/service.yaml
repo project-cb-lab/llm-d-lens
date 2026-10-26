@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-p
+spec:
+  selector:
+    llm-d.ai/role: decode
+  ports:
+    - name: http
+      port: 8000

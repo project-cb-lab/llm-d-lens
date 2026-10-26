@@ -1,0 +1,7 @@
+# A P/D model server with one DisaggregatedSet, rolled in place.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: model-p-serving
+resources:
+  - disaggregatedset.yaml
+  - service.yaml

@@ -15,6 +15,7 @@ from .commands import Context, Handler
 from .commands import importing as import_command
 from .commands import plan as plan_command
 from .commands import render as render_command
+from .commands import rollouts as rollouts_command
 from .commands import sources as sources_command
 from .commands import stacks as stacks_command
 from .commands import standup as standup_command
@@ -34,6 +35,8 @@ examples:
   llmd standup manifests/production/<model>/<cluster> --expected-digest <digest from plan> --wait
   llmd import manifests/production/<model>/<cluster> --dry-run   # a stack deployed with `oc apply -k`
   llmd import manifests/production/<model>/<cluster>             # record it; nothing on it changes
+  llmd rollouts plan manifests/production/<model>/<cluster> --name <instance> \
+      --source https://github.com/project-cb-lab/curvebender-tools.git#refs/pull/<N>/head
   llmd list
   llmd status <instance>
   llmd teardown <instance>
@@ -47,6 +50,7 @@ COMMAND_MODULES = [
     plan_command,
     standup_command,
     import_command,
+    rollouts_command,
     status_command,
     teardown_command,
 ]
