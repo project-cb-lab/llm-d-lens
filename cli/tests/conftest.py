@@ -1,4 +1,6 @@
+import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -31,3 +33,17 @@ def isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.delenv("LLMD_STATE_DIR", raising=False)
     monkeypatch.delenv("LLMD_NAMESPACE", raising=False)
     monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+
+
+DATA = Path(__file__).parent / "data"
+
+
+@pytest.fixture
+def cbrepo(tmp_path):
+    """A small repository in curvebender-tools' layout, committed so listing reads Git."""
+    target = tmp_path / "cbrepo"
+    shutil.copytree(DATA / "cbrepo", target)
+    git(target, "init", "-q", "-b", "main")
+    git(target, "add", "-A")
+    git(target, "commit", "-q", "-m", "stacks")
+    return target

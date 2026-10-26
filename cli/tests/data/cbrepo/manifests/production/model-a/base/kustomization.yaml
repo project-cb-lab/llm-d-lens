@@ -1,0 +1,6 @@
+# The model server, included by each cluster overlay. Never applied on its own.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: model-a-serving
+resources:
+  - model-server

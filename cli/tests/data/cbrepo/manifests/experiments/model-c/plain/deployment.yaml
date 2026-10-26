@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-c
+  namespace: model-c-test
+spec:
+  selector:
+    matchLabels: {app: model-c}
+  template:
+    metadata:
+      labels: {app: model-c}
+    spec:
+      containers:
+        - name: vllm
+          image: registry.example.invalid/vllm:v1

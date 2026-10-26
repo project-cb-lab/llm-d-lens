@@ -13,6 +13,7 @@ import sys
 from . import __version__
 from .commands import Context, Handler
 from .commands import sources as sources_command
+from .commands import stacks as stacks_command
 from .errors import LlmdError
 
 EXAMPLES = """\
@@ -20,10 +21,11 @@ examples:
   llmd sources add cb https://github.com/project-cb-lab/curvebender-tools.git#main
   llmd sources add cb-local /path/to/curvebender-tools
   llmd sources list
+  llmd stacks manifests/production                             # the stacks of the source
 """
 
 #: Modules that add subcommands, in the order ``--help`` lists them.
-COMMAND_MODULES = [sources_command]
+COMMAND_MODULES = [sources_command, stacks_command]
 
 
 def build_parser() -> tuple[argparse.ArgumentParser, dict[str, Handler]]:

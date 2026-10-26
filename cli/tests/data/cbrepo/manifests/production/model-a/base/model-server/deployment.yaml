@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-a
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: model-a
+  template:
+    metadata:
+      labels:
+        app: model-a
+    spec:
+      serviceAccountName: model-a
+      containers:
+        - name: vllm
+          image: registry.example.invalid/vllm@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          args: ["--model", "/models/model-a", "--port", "8000"]
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: model-a-cache
+            readOnly: true

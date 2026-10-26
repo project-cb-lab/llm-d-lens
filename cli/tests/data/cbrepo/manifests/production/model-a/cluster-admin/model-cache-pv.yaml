@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: model-a-cache
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes: [ReadOnlyMany]
+  hostPath:
+    path: /var/models
