@@ -175,3 +175,25 @@ def test_a_drain_command_with_another_context_is_refused(rollrepo, cluster, tmp_
     argv = ["--state-dir", str(tmp_path), "rollouts", "start", STACK, "--source", str(rollrepo), "-n", NS]
     assert main([*argv, "--name", "pd", "--context", "other", "--drain", DRAIN]) == 2
     assert "use-context other" in capsys.readouterr().err
+
+
+def test_an_instance_llmd_stood_up_rolls_with_server_side_apply(rollrepo, tmp_path, capsys, monkeypatch):  # noqa: F811
+    from .fakes import FakeCluster
+
+    fresh = FakeCluster(namespaces=("team-a",))
+    monkeypatch.setattr("llmd.commands.RUNNER", fresh)
+    state = ["--state-dir", str(tmp_path)]
+    target = [STACK, "--source", str(rollrepo), "-n", "team-a", "--name", "pd"]
+    assert main([*state, "standup", *target]) == 0
+    new_image(rollrepo)
+    assert main([*state, "rollouts", "plan", *target]) == 0
+    assert "model-p: roll" in capsys.readouterr().out
+    assert main([*state, "rollouts", "start", *target, "--no-drain"]) == 0
+    live = fresh.get("team-a", DS, "model-p")
+    assert live["metadata"]["labels"]["lens.llm-d.ai/instance"] == "pd"  # still llmd's
+    assert "kubectl.kubernetes.io/last-applied-configuration" not in live["metadata"].get("annotations", {})
+    while fresh.roll_step("team-a", "model-p"):
+        pass
+    assert main([*state, "rollouts", "finish", "pd", "-n", "team-a"]) == 0
+    assert main([*state, "teardown", "pd", "-n", "team-a", "-y"]) == 0
+    assert fresh.get("team-a", DS, "model-p") is None
