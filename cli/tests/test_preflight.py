@@ -7,6 +7,7 @@ from llmd.cli import main
 from llmd.commands import plan as plan_command
 from llmd.kube import Kube
 from llmd.plan import Options, make_plan
+from llmd.policy import PolicyContext, apply_policy
 from llmd.preflight import preflight
 from llmd.sources import resolve_source
 
@@ -55,6 +56,34 @@ def test_missing_prerequisites_block_before_any_change(cbrepo, cluster):
     assert plan.cluster["dryRun"] == "skipped"
     missing = {item["name"] for item in plan.policy.prerequisites if item["state"] == "missing"}
     assert missing == {"hf-token", "model-a", "model-a-cache"}
+
+
+def test_a_missing_scrape_secret_warns_and_does_not_block(cbrepo, cluster):
+    """The stack serves without it; only its metrics stay empty. A Secret a pod also needs still blocks."""
+    prerequisites(cluster)
+    cluster.serve("monitoring.coreos.com/v1", "PodMonitor", "podmonitors")
+    plan = checked(cbrepo, cluster)
+    monitor = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "PodMonitor",
+        "metadata": {"name": "model-a", "namespace": "team-a"},
+        "spec": {
+            "podMetricsEndpoints": [
+                {"port": "metrics", "authorization": {"credentials": {"name": "scrape-token", "key": "t"}}},
+                {"port": "other", "bearerTokenSecret": {"name": "hf-token", "key": "t"}},
+            ]
+        },
+    }
+    plan.policy = apply_policy([*plan.documents, monitor], PolicyContext(namespace="team-a", instance="r1"))
+    preflight(Kube(runner=cluster), plan)
+    assert not plan.blocking
+    assert codes(plan, "warning") == ["monitor-secret-missing"]
+    states = {item["name"]: item["state"] for item in plan.policy.prerequisites}
+    assert states["scrape-token"] == "missing" and states["hf-token"] == "present"
+    cluster.objects.pop(("team-a", "secrets", "hf-token"))
+    plan.findings[:] = [finding for finding in plan.findings if finding.severity == "info"]
+    preflight(Kube(runner=cluster), plan)
+    assert codes(plan) == ["prerequisite-missing"]  # the pods need hf-token too
 
 
 def test_a_missing_namespace_or_api_blocks(cbrepo, cluster):

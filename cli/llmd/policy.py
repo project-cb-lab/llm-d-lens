@@ -11,7 +11,8 @@ This is where the guarantees for a team without cluster-admin rights live:
   acknowledges them (``--allow-privileged``): admission acts on Pods, which a server-side dry
   run of a Deployment does not create, so they are found here;
 * objects the stack uses but does not ship (Secrets, claims, ConfigMaps, ServiceAccounts,
-  network attachments) are prerequisites the namespace must already hold.
+  network attachments, and the Secrets a monitor scrapes with) are prerequisites the namespace
+  must already hold.
 
 Pod templates are never changed: a label there would start a new DisaggregatedSet revision and
 roll every group. Objects llmd creates carry its labels in their own metadata only.
@@ -98,6 +99,25 @@ WORKLOAD_KINDS = {
 
 #: Prometheus Operator monitors: they select pods in the namespaces their ``namespaceSelector`` names.
 MONITOR_KINDS = {"PodMonitor", "ServiceMonitor"}
+#: Where a monitor's endpoint names a Secret it scrapes with (a key of a Secret in its namespace),
+#: as paths below each endpoint (monitoring.coreos.com/v1).
+MONITOR_SECRETS = [
+    ("authorization", "credentials"),
+    ("basicAuth", "username"),
+    ("basicAuth", "password"),
+    ("bearerTokenSecret",),
+    ("oauth2", "clientId", "secret"),
+    ("oauth2", "clientSecret"),
+    *(
+        (*prefix, *path)
+        for prefix in ((), ("oauth2",))
+        for path in (
+            ("tlsConfig", "ca", "secret"),
+            ("tlsConfig", "cert", "secret"),
+            ("tlsConfig", "keySecret"),
+        )
+    ),
+]
 
 #: (apiVersion, kind) -> True when namespaced, False when cluster-scoped, None when unknown.
 ScopeResolver = Callable[[str, str], bool | None]
@@ -431,6 +451,21 @@ def _network_names(value: Any) -> list[str]:
     return [item.split("@", 1)[0].strip() for item in text.split(",") if item.strip()]
 
 
+def monitor_secrets(document: dict[str, Any]) -> list[str]:
+    """The Secrets a PodMonitor or ServiceMonitor scrapes with; an optional one is left out."""
+    spec = document.get("spec") or {}
+    endpoints = spec.get("podMetricsEndpoints") or spec.get("endpoints") or []
+    names = []
+    for endpoint in endpoints if isinstance(endpoints, list) else []:
+        for path in MONITOR_SECRETS:
+            value: Any = endpoint
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            if isinstance(value, dict) and value.get("name") and not value.get("optional"):
+                names.append(str(value["name"]))
+    return names
+
+
 def _analyze(documents: list[dict[str, Any]], context: PolicyContext, result: PolicyResult) -> None:
     """Safety findings, prerequisites, and the workload summary."""
     findings = result.findings
@@ -466,6 +501,9 @@ def _analyze(documents: list[dict[str, Any]], context: PolicyContext, result: Po
                             object=ref,
                         )
                     )
+        if document["kind"] in MONITOR_KINDS:
+            for name in monitor_secrets(document):
+                need("Secret", name, ref)
         for location, template, pods in pod_templates(document):
             _analyze_template(document, location, template, pods, severity, need, result)
     for (kind, name), users in sorted(required.items()):

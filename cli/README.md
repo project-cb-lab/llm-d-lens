@@ -54,7 +54,9 @@ administrator may apply (`--admin-yaml FILE` writes them; `--skip-admin-parts` o
 privileged containers and hostPath volumes (`--allow-privileged` once an administrator granted them), missing
 Secrets, claims and network attachments, missing permissions, and objects another tool already deployed.
 For a stack that grants an SCC to its pods, the administrator applies the binding from `--admin-yaml`; the
-team then passes both `--skip-admin-parts` and `--allow-privileged`.
+team then passes both `--skip-admin-parts` and `--allow-privileged`. A Secret that only a PodMonitor or
+ServiceMonitor scrapes with is a warning, not a blocker: the stack serves without it, but those metrics stay
+empty.
 
 `standup` records the instance before it applies anything, then applies with server-side apply. `teardown`
 deletes exactly the recorded objects whose UID still matches; claims are kept unless `--delete-volumes`.

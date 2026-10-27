@@ -2,7 +2,8 @@
 
 * the namespace exists and the cluster serves every API the stack uses;
 * the user may get, list, create, patch and delete what the plan applies;
-* the prerequisites (Secrets, claims, ServiceAccounts, network attachments) are present;
+* the prerequisites (Secrets, claims, ServiceAccounts, network attachments) are present; a
+  Secret only a monitor scrapes with is a warning, since the stack serves without it;
 * every object either does not exist yet or belongs to this instance: llmd never overwrites
   an object it did not create (``import`` records such objects instead);
 * the server accepts the objects (a server-side dry run).
@@ -19,6 +20,7 @@ from .errors import CommandError
 from .kube import Kube
 from .model import INSTANCE_LABEL, MANAGED_BY_LABEL, MANAGED_BY_VALUE, Finding, api_group, object_ref
 from .plan import Plan
+from .policy import MONITOR_KINDS
 
 #: Prerequisite kind -> (apiVersion, kubectl resource).
 PREREQUISITES = {
@@ -151,7 +153,19 @@ def _check_prerequisites(kube: Kube, plan: Plan) -> None:
         except CommandError:
             item["state"] = "unverified"
             continue
-        if item["state"] == "missing":
+        if item["state"] == "missing" and _only_monitors(item):
+            # Only a scrape needs it: the stack serves without it, but its metrics stay empty.
+            plan.findings.append(
+                Finding(
+                    "warning",
+                    "monitor-secret-missing",
+                    f"{item['kind']}/{item['name']} is missing in {plan.namespace}: "
+                    f"{', '.join(item['usedBy'])} cannot scrape without it, so its metrics stay empty",
+                    object=f"{item['kind']}/{item['name']}",
+                    hint="Create it, or ask the namespace's administrator.",
+                )
+            )
+        elif item["state"] == "missing":
             plan.findings.append(
                 Finding(
                     "error",
@@ -162,6 +176,10 @@ def _check_prerequisites(kube: Kube, plan: Plan) -> None:
                     "administrator.",
                 )
             )
+
+
+def _only_monitors(item: dict[str, Any]) -> bool:
+    return all(user.split("/", 1)[0] in MONITOR_KINDS for user in item["usedBy"])
 
 
 def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:

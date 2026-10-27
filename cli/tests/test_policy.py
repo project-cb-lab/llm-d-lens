@@ -170,6 +170,54 @@ def test_what_the_stack_uses_but_does_not_ship_is_a_prerequisite():
     ]
 
 
+def test_a_secret_a_monitor_scrapes_with_is_a_prerequisite():
+    """Without it the scrape fails, and a dashboard over those metrics stays empty."""
+
+    def selector(name, optional=False):
+        return {"name": name, "key": "k", **({"optional": True} if optional else {})}
+
+    pods = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "PodMonitor",
+        "metadata": {"name": "epp"},
+        "spec": {
+            "podMetricsEndpoints": [
+                {"port": "metrics", "authorization": {"credentials": selector("scrape-token")}},
+                {
+                    "port": "tls",
+                    "tlsConfig": {"ca": {"secret": selector("scrape-ca")}, "keySecret": selector("k", True)},
+                },
+            ]
+        },
+    }
+    services = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "ServiceMonitor",
+        "metadata": {"name": "proxy"},
+        "spec": {
+            "endpoints": [
+                {
+                    "port": "a",
+                    "basicAuth": {"username": selector("scrape-user"), "password": selector("scrape-user")},
+                },
+                {"port": "b", "bearerTokenSecret": selector("legacy-token")},
+                {
+                    "port": "c",
+                    "oauth2": {"clientId": {"configMap": selector("id")}, "clientSecret": selector("oauth")},
+                },
+            ]
+        },
+    }
+    shipped = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "scrape-ca"}}
+    result = apply_policy([pods, services, shipped], PolicyContext(namespace="team-a", instance="r1"))
+    assert [(item["name"], item["usedBy"]) for item in result.prerequisites] == [
+        ("legacy-token", ["ServiceMonitor/proxy"]),
+        ("oauth", ["ServiceMonitor/proxy"]),
+        ("scrape-token", ["PodMonitor/epp"]),
+        ("scrape-user", ["ServiceMonitor/proxy"]),
+    ]
+
+
 def test_accelerators_count_every_pod_of_every_group():
     result = apply_policy(
         [deployment(), disaggregated_set()], PolicyContext(namespace="team-a", instance="r1")
