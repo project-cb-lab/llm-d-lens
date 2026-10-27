@@ -96,6 +96,9 @@ WORKLOAD_KINDS = {
     "DisaggregatedSet",
 }
 
+#: Prometheus Operator monitors: they select pods in the namespaces their ``namespaceSelector`` names.
+MONITOR_KINDS = {"PodMonitor", "ServiceMonitor"}
+
 #: (apiVersion, kind) -> True when namespaced, False when cluster-scoped, None when unknown.
 ScopeResolver = Callable[[str, str], bool | None]
 
@@ -362,8 +365,8 @@ def _walk_strings(value: Any, transform: Callable[[str], str]) -> Any:
 
 def _rewrite_namespace_references(document: dict[str, Any], old: str, new: str) -> tuple[dict[str, Any], int]:
     """Rewrite in-stack references to ``old``: Service DNS names, ``namespace:``/``--namespace``
-    settings, ``-n`` arguments, NAMESPACE variables, and RoleBinding subjects. Metadata is never
-    rewritten, and plain words elsewhere are left alone."""
+    settings, ``-n`` arguments, NAMESPACE variables, RoleBinding subjects, and the namespaces a
+    monitor selects. Metadata is never rewritten, and plain words elsewhere are left alone."""
     count = 0
     service = re.compile(rf"(?<=\.){re.escape(old)}(?=\.svc\b)")
     setting = re.compile(rf"((?:[Nn]amespace)[\"']?\s*[:=]\s*[\"']?){re.escape(old)}\b")
@@ -403,6 +406,12 @@ def _rewrite_namespace_references(document: dict[str, Any], old: str, new: str) 
         for subject in document.get("subjects") or []:
             if subject.get("namespace") == old:
                 subject["namespace"] = new
+                count += 1
+    if document["kind"] in MONITOR_KINDS:
+        names = ((document.get("spec") or {}).get("namespaceSelector") or {}).get("matchNames")
+        for position, name in enumerate(names if isinstance(names, list) else []):
+            if name == old:
+                names[position] = new
                 count += 1
     return document, count
 

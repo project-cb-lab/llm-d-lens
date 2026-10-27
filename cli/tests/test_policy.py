@@ -77,6 +77,24 @@ def test_objects_move_into_the_target_namespace_and_references_follow():
     assert {"namespace-rewritten", "route-host-dropped"} <= set(codes(result, "info"))
 
 
+def test_a_monitor_follows_the_stack_into_the_target_namespace():
+    """A PodMonitor that still named the old namespace would scrape nothing where the stack runs."""
+    monitor = {
+        "apiVersion": "monitoring.coreos.com/v1",
+        "kind": "PodMonitor",
+        "metadata": {"name": "epp", "namespace": "written-for"},
+        "spec": {
+            "namespaceSelector": {"matchNames": ["written-for", "shared-metrics"]},
+            "selector": {"matchLabels": {"app": "epp"}},
+            "podMetricsEndpoints": [{"port": "metrics"}],
+        },
+    }
+    result = apply_policy([monitor], PolicyContext(namespace="team-a", instance="r1"))
+    [moved] = result.documents
+    assert moved["spec"]["namespaceSelector"]["matchNames"] == ["team-a", "shared-metrics"]
+    assert monitor["spec"]["namespaceSelector"]["matchNames"] == ["written-for", "shared-metrics"]
+
+
 def test_a_stack_deployed_where_it_was_written_for_is_unchanged():
     original = deployment(namespace="team-a")
     result = apply_policy([original], PolicyContext(namespace="team-a", instance="r1", label=False))
