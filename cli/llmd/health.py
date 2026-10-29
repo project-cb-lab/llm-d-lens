@@ -226,13 +226,16 @@ def pod_problems(pods: list[dict[str, Any]]) -> list[dict[str, str]]:
         ]:
             waiting = (container.get("state") or {}).get("waiting") or {}
             if waiting.get("reason") and waiting["reason"] not in ("ContainerCreating", "PodInitializing"):
-                problems.append(
-                    {
-                        "pod": metadata.get("name", ""),
-                        "reason": waiting["reason"],
-                        "message": (waiting.get("message") or "")[:300],
-                    }
-                )
+                problem = {
+                    "pod": metadata.get("name", ""),
+                    "reason": waiting["reason"],
+                    "message": (waiting.get("message") or "")[:300],
+                    "container": container.get("name", ""),
+                }
+                ended = (container.get("lastState") or {}).get("terminated") or {}
+                if ended.get("exitCode") is not None:
+                    problem["exitCode"] = str(ended["exitCode"])
+                problems.append(problem)
                 break
     return problems
 

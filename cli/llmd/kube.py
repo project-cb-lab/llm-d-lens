@@ -206,6 +206,14 @@ class Kube:
             raise CommandError(f"reading {resource} in {namespace} failed: {result.message}")
         return yamlio.kubectl_objects(result.stdout)
 
+    def previous_log(self, pod: str, container: str, namespace: str, *, lines: int = 20) -> str | None:
+        """The last ``lines`` lines a container wrote before its last restart, or None when they cannot
+        be read (no permission, or the log is gone)."""
+        result = self.run(
+            "logs", pod, "-c", container, "-n", namespace, "--previous", f"--tail={lines}", timeout=30
+        )
+        return result.stdout if result.ok else None
+
     def get(self, resource: str, name: str, namespace: str) -> dict[str, Any] | None:
         found = self.get_json(resource, namespace, names=[name])
         return found[0] if found else None

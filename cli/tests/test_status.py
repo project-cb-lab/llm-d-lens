@@ -188,9 +188,8 @@ def test_a_pending_pod_with_no_other_reason_shows_its_latest_warning(cbrepo, clu
     ]
     pod["status"]["containerStatuses"][0]["state"]["waiting"] = {"reason": "ImagePullBackOff", "message": "x"}
     calls = len(cluster.calls)
-    assert [problem["reason"] for problem in instance_status(kube, "team-a", "r1")["pods"]["problems"]] == [
-        "ImagePullBackOff"
-    ]
+    [problem] = instance_status(kube, "team-a", "r1")["pods"]["problems"]
+    assert problem["reason"] == "ImagePullBackOff" and "log" not in problem
     assert not [call for call in cluster.calls[calls:] if call[:2] == ["get", "events"]]
 
 
@@ -201,3 +200,62 @@ def test_status_without_permission_to_read_events_shows_what_the_pods_say(cbrepo
     cluster.denied.add(("list", "events"))
     status = instance_status(kube, "team-a", "r1")
     assert status["pods"]["problems"] == []
+
+
+def crashing(cluster, name="model-a-0"):
+    pod = cluster.get("team-a", "pods", name)
+    pod["status"] = {
+        "phase": "Running",
+        "conditions": [{"type": "PodScheduled", "status": "True"}],
+        "containerStatuses": [
+            {
+                "name": "vllm",
+                "restartCount": 3,
+                "state": {"waiting": {"reason": "CrashLoopBackOff", "message": "back-off 1m20s"}},
+                "lastState": {"terminated": {"exitCode": 1, "reason": "Error"}},
+            }
+        ],
+    }
+    return pod
+
+
+def test_a_crashing_container_shows_its_exit_code_and_last_lines(
+    cbrepo, cluster, tmp_path, capsys, monkeypatch
+):
+    kube = stood_up(cbrepo, cluster)
+    crashing(cluster)
+    error = (
+        "huggingface_hub.errors.HFValidationError: Repo id must be in the form 'repo_name' or "
+        "'namespace/repo_name': '/model-cache/models/model-a'. Use `repo_type` argument if needed."
+    )
+    cluster.previous_logs[("model-a-0", "vllm")] = "\n".join(
+        [*(f"  frame {n}" for n in range(30)), "", error]
+    )
+    [problem] = instance_status(kube, "team-a", "r1")["pods"]["problems"]
+    assert problem["container"] == "vllm" and problem["exitCode"] == "1"
+    assert problem["log"].splitlines() == [*(f"  frame {n}" for n in range(24, 30)), error]
+    assert ["logs", "model-a-0", "-c", "vllm", "-n", "team-a", "--previous", "--tail=8"] in cluster.calls
+    monkeypatch.setattr("llmd.commands.RUNNER", cluster)
+    assert main(["--state-dir", str(tmp_path), "status", "r1"]) == 0
+    out = capsys.readouterr().out
+    assert "pod model-a-0 container vllm: CrashLoopBackOff, exit code 1 back-off 1m20s" in out
+    assert "last lines before it exited:" in out and f"      {error}" in out
+
+
+def test_crash_logs_are_read_once_per_workload_and_only_when_allowed(cbrepo, cluster):
+    kube = stood_up(cbrepo, cluster)
+    deployment = cluster.get("team-a", "deployments.apps", "model-a")
+    deployment["spec"]["replicas"] = 2
+    cluster.settle()
+    crashing(cluster, "model-a-0")
+    crashing(cluster, "model-a-1")
+    cluster.previous_logs[("model-a-0", "vllm")] = "boom"
+    cluster.previous_logs[("model-a-1", "vllm")] = "boom"
+    calls = len(cluster.calls)
+    problems = instance_status(kube, "team-a", "r1")["pods"]["problems"]
+    assert [problem.get("log") for problem in problems] == ["boom", None]
+    assert len([call for call in cluster.calls[calls:] if call[0] == "logs"]) == 1
+    cluster.denied.add(("get", "pods/log"))
+    problems = instance_status(kube, "team-a", "r1")["pods"]["problems"]
+    assert [problem["reason"] for problem in problems] == ["CrashLoopBackOff"] * 2
+    assert not any("log" in problem for problem in problems)

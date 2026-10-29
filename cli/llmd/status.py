@@ -6,8 +6,10 @@ workload's own selector.
 
 A pod that is not Ready is explained from its own status first. A Pending pod whose status
 says nothing (stuck in ContainerCreating on a volume that does not mount, say) gets its
-latest Warning event, from one read of the namespace's pod events. That read is best effort:
-without permission to list events, status shows what the pods say.
+latest Warning event, from one read of the namespace's pod events. A container that crashed
+and is restarting gets the last lines it wrote, for one pod per workload (its replicas run the
+same arguments). Both reads are best effort: without permission, status shows what the pods
+say.
 """
 
 from __future__ import annotations
@@ -43,7 +45,9 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         if selector:
             pods_total += sum(1 for pod in pods if not (pod.get("metadata") or {}).get("deletionTimestamp"))
             pods_ready += sum(1 for pod in pods if health.pod_ready(pod))
-            problems += health.pod_problems(pods)
+            found = health.pod_problems(pods)
+            _add_crash_log(kube, namespace, found)
+            problems += found
             seen += pods
         if live and item["kind"] == "Service":
             for port in (live.get("spec") or {}).get("ports") or []:
@@ -60,6 +64,23 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
     }
+
+
+#: Waiting reasons of a container that ran and exited, whose previous log says why.
+CRASH_REASONS = {"CrashLoopBackOff", "RunContainerError"}
+#: Log lines shown for a crashed container.
+CRASH_LOG_LINES = 8
+
+
+def _add_crash_log(kube: Kube, namespace: str, problems: list[dict[str, str]]) -> None:
+    """The last lines the first crashed container of one workload wrote before it exited."""
+    for problem in problems:
+        if problem["reason"] in CRASH_REASONS and problem.get("container"):
+            log = kube.previous_log(problem["pod"], problem["container"], namespace, lines=CRASH_LOG_LINES)
+            lines = [line.rstrip() for line in (log or "").splitlines() if line.strip()]
+            if lines:
+                problem["log"] = "\n".join(lines[-CRASH_LOG_LINES:])[-1500:]
+            return
 
 
 #: The pod's PodScheduled condition already says why it is not scheduled, and stays current.

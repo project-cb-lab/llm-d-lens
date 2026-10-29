@@ -79,6 +79,8 @@ class FakeCluster:
         #: (old LeaderWorkerSet, new replicas) -> allowed? Stands in for an admission policy that
         #: holds the controller's scale-down until a group is drained.
         self.refuse_scale_down = None
+        #: (pod, container) -> what ``kubectl logs --previous`` prints for it.
+        self.previous_logs: dict[tuple[str, str], str] = {}
 
     # -- helpers for tests ---------------------------------------------------------------------------
     def serve(self, api_version: str, kind: str, plural: str, namespaced: bool = True) -> None:
@@ -369,6 +371,7 @@ class FakeCluster:
             "apply": self._apply,
             "get": self._get,
             "delete": self._delete,
+            "logs": self._logs,
         }.get(args[0])
         return handler(args, stdin) if handler else _fail(f"fake kubectl does not support {args}")
 
@@ -464,6 +467,16 @@ class FakeCluster:
             and (not fields or self._field_selected(document, fields))
         ]
         return _ok(json.dumps({"kind": "List", "items": items}))
+
+    def _logs(self, args: list[str], stdin: str) -> Result:
+        if ("get", "pods/log") in self.denied:
+            return _fail(f'Error from server (Forbidden): pods "{args[1]}" is forbidden: User "{self.user}"')
+        log = self.previous_logs.get((args[1], self._option(args, "-c")))
+        if log is None:
+            return _fail("Error from server (BadRequest): previous terminated container not found")
+        tail = self._option(args, "--tail")
+        lines = log.splitlines()
+        return _ok("\n".join(lines[-int(tail) :] if tail else lines) + "\n")
 
     def _delete(self, args: list[str], stdin: str) -> Result:
         resource = self._canonical(args[1])

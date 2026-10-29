@@ -45,7 +45,14 @@ def print_status(status: dict) -> None:
         print(f"  {item['state']:<12} {item['object']}" + (f"  {item['detail']}" if item["detail"] else ""))
     for problem in pods["problems"][:10]:
         seen = f" (event, last seen {problem['lastSeen']})" if problem.get("lastSeen") else ""
-        print(f"  pod {problem['pod']}: {problem['reason']} {problem['message']}".rstrip() + seen)
+        where = f" container {problem['container']}" if problem.get("container") else ""
+        exited = f", exit code {problem['exitCode']}" if problem.get("exitCode") else ""
+        line = f"  pod {problem['pod']}{where}: {problem['reason']}{exited} {problem['message']}"
+        print(line.rstrip() + seen)
+        if problem.get("log"):
+            print("    last lines before it exited:")
+            for text in problem["log"].splitlines():
+                print(f"      {text}")
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
 
