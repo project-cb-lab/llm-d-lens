@@ -1,6 +1,6 @@
 import pytest
 
-from llmd.errors import CommandError, NotFoundError
+from llmd.errors import CommandError, NotFoundError, PolicyError
 from llmd.kube import Kube, Target, guess_plural
 
 from .fakes import FakeCluster
@@ -62,6 +62,18 @@ def test_a_refused_apply_is_a_command_error(kube, cluster):
     cluster.denied.add(("create", "configmaps"))
     with pytest.raises(CommandError, match="Forbidden"):
         kube.apply([CONFIGMAP], "team-a")
+
+
+def test_writes_stay_in_the_namespace(kube, cluster):
+    elsewhere = {**CONFIGMAP, "metadata": {"name": "a", "namespace": "team-b"}}
+    role = {"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole", "metadata": {"name": "r"}}
+    for document in (elsewhere, role):
+        with pytest.raises(PolicyError, match="refusing to apply"):
+            kube.apply([CONFIGMAP, document], "team-a", dry_run=True)
+    for resource in ("clusterroles.rbac.authorization.k8s.io", "persistentvolumes", "namespaces"):
+        with pytest.raises(PolicyError, match="refusing to delete"):
+            kube.delete(resource, "x", "team-a")
+    assert not [call for call in cluster.calls if call[0] in ("apply", "delete")]
 
 
 def test_access_reviews(kube, cluster):

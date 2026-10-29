@@ -3,6 +3,9 @@
 * API discovery uses ``get --raw /api/v1`` and ``/apis/<group>/<version>``, which every
   authenticated user may read; it gives each kind's scope and plural name.
 * Permission checks submit SelfSubjectAccessReviews in one ``create -f -`` call.
+* Writes stay in the target namespace: ``apply`` refuses a cluster-scoped object or one that
+  names another namespace, and ``delete`` refuses a cluster-scoped resource, since kubectl
+  ignores ``-n`` for those.
 * Objects llmd creates are applied with server-side apply under the ``llm-d-lens`` field
   manager. Objects of an imported stack are applied the way the team applies them
   (``kubectl apply``, client-side), so the team's own ``oc apply`` keeps working.
@@ -17,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import yamlio
-from .errors import CommandError, NotFoundError
+from .errors import CommandError, NotFoundError, PolicyError
 from .model import FIELD_MANAGER, api_group
 from .process import Result, Runner, subprocess_runner
 
@@ -212,6 +215,8 @@ class Kube:
     ) -> list[dict[str, Any]]:
         """Apply objects. ``server_side`` uses server-side apply as llmd's field manager; without it,
         ``kubectl apply`` as a team applies its YAML (the last-applied annotation is kept)."""
+        for document in documents:
+            self._require_in(namespace, document)
         args = ["apply", "-n", namespace, "-o", "json", "-f", "-"]
         if server_side:
             args[1:1] = ["--server-side", f"--field-manager={FIELD_MANAGER}"]
@@ -228,6 +233,8 @@ class Kube:
         return yamlio.kubectl_objects(result.stdout)
 
     def delete(self, resource: str, name: str, namespace: str, *, wait: bool = False) -> bool:
+        if not self._namespaced_resource(resource):
+            raise PolicyError(f"refusing to delete {resource}/{name}: it is not a namespaced resource")
         result = self.run(
             "delete",
             resource,
@@ -244,11 +251,49 @@ class Kube:
             raise CommandError(f"deleting {resource}/{name} failed: {result.message}")
         return bool(result.stdout.strip())
 
+    def _require_in(self, namespace: str, document: dict[str, Any]) -> None:
+        """Refuse an object that would land outside ``namespace``."""
+        metadata = document.get("metadata") or {}
+        ref = f"{document['kind']}/{metadata.get('name')}"
+        if metadata.get("namespace") and metadata["namespace"] != namespace:
+            raise PolicyError(f"refusing to apply {ref}: it names namespace {metadata['namespace']}")
+        if self.scope(document["apiVersion"], document["kind"]) is False:
+            raise PolicyError(f"refusing to apply {ref}: it is cluster-scoped")
+
+    def _namespaced_resource(self, resource: str) -> bool:
+        """Whether a ``plural.group`` resource is namespaced, by the discovery done so far; a
+        resource discovery has not seen is taken as namespaced only when it is not a known
+        cluster-scoped one."""
+        plural, _, group = resource.partition(".")
+        for found in self._discovery.values():
+            for item in (found or {}).values():
+                if item.plural == plural and item.group == group:
+                    return item.namespaced
+        return plural not in _CLUSTER_SCOPED_PLURALS
+
     def require(self, resource: str, name: str, namespace: str) -> dict[str, Any]:
         found = self.get(resource, name, namespace)
         if found is None:
             raise NotFoundError(f"{resource}/{name} not found in {namespace}")
         return found
+
+
+#: Resources kubectl would delete cluster-wide whatever ``-n`` says, when discovery has not run.
+_CLUSTER_SCOPED_PLURALS = {
+    "namespaces",
+    "nodes",
+    "persistentvolumes",
+    "clusterroles",
+    "clusterrolebindings",
+    "customresourcedefinitions",
+    "storageclasses",
+    "priorityclasses",
+    "securitycontextconstraints",
+    "validatingwebhookconfigurations",
+    "mutatingwebhookconfigurations",
+    "validatingadmissionpolicies",
+    "validatingadmissionpolicybindings",
+}
 
 
 def _in_cluster() -> bool:
