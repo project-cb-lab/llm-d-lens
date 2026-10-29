@@ -99,3 +99,11 @@ def test_standup_command(cbrepo, cluster, tmp_path, capsys, monkeypatch):
     cluster.objects.pop(("team-a", "secrets", "hf-token"))
     assert main(base) == 3
     assert "BLOCKED" in capsys.readouterr().out
+
+
+def test_standup_takes_the_digest_plan_prints(cbrepo, cluster):
+    plan = plan_for(cbrepo, cluster)
+    with pytest.raises(ConflictError, match="changed since the plan was reviewed"):
+        lifecycle.standup(Kube(runner=cluster), plan, expected_digest=plan.digest[:8])
+    result = lifecycle.standup(Kube(runner=cluster), plan, expected_digest=plan.digest[:16].upper())
+    assert result["digest"] == plan.digest

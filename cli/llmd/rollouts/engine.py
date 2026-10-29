@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import inventory
+from .. import inventory, yamlio
 from ..errors import ConflictError, NotReadyError, PolicyError, UsageError
 from ..importing import comparable
 from ..kube import Kube
@@ -85,7 +85,7 @@ def start(
             details=[finding.as_dict() for finding in rollout.blocking],
             hint="Run `llmd rollouts plan` to see them.",
         )
-    if expected_digest and expected_digest != rollout.digest:
+    if expected_digest and not yamlio.digest_matches(expected_digest, rollout.digest):
         raise ConflictError(
             "the rollout changed since it was reviewed", hint="Review `llmd rollouts plan` again."
         )

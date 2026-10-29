@@ -126,7 +126,7 @@ def print_plan(plan: Plan) -> None:
             print(f"  {finding['severity'].upper():<8} {finding['message']}")
             if finding.get("hint"):
                 print(f"           hint: {finding['hint']}")
-    print(f"\nDigest {summary['digest'][:16]}")
+    print(f"\nDigest {summary['digest'][: yamlio.SHORT_DIGEST]}")
     print(
         "Result "
         + (f"BLOCKED by {summary['blocking']} finding(s)" if summary["blocking"] else "ready to stand up")

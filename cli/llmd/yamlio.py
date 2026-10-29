@@ -80,6 +80,16 @@ def digest(value: Any) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+#: Plans print this many leading characters of their digest; ``--expected-digest`` takes them.
+SHORT_DIGEST = 16
+
+
+def digest_matches(expected: str, digest: str) -> bool:
+    """Whether ``expected`` (the full digest, or at least the printed prefix of it) is ``digest``."""
+    expected = expected.strip().lower()
+    return len(expected) >= SHORT_DIGEST and digest.startswith(expected)
+
+
 def write_text_atomic(path: Path, text: str, *, mode: int | None = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import inventory
+from . import inventory, yamlio
 from .errors import ConflictError, PolicyError
 from .kube import Kube
 from .model import INSTANCE_LABEL, MANAGED_BY_LABEL, MANAGED_BY_VALUE
@@ -28,10 +28,10 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
             details=[finding.as_dict() for finding in plan.blocking],
             hint="Run `llmd plan` to see them.",
         )
-    if expected_digest and expected_digest != plan.digest:
+    if expected_digest and not yamlio.digest_matches(expected_digest, plan.digest):
         raise ConflictError(
             "the stack or the cluster changed since the plan was reviewed",
-            hint=f"Review `llmd plan` again; it now has digest {plan.digest[:16]}.",
+            hint=f"Review `llmd plan` again; it now has digest {plan.digest[: yamlio.SHORT_DIGEST]}.",
         )
     previous = inventory.read(kube, plan.namespace, plan.instance)
     if previous and inventory.management(previous) == inventory.IMPORTED:
