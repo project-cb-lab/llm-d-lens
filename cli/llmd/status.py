@@ -10,6 +10,10 @@ latest Warning event, from one read of the namespace's pod events. A container t
 and is restarting gets the last lines it wrote, for one pod per workload (its replicas run the
 same arguments). Both reads are best effort: without permission, status shows what the pods
 say.
+
+Someone with fewer rights than the person who stood the instance up may not read every
+kind it holds. Such an object is shown as unreadable and the rest is still shown; the
+instance is then Unknown rather than Ready, since part of it was not seen.
 """
 
 from __future__ import annotations
@@ -23,12 +27,25 @@ from .kube import Kube
 from .policy import pod_templates, template_accelerators
 
 
+def _denied(error: CommandError) -> str:
+    """A short reason a read failed, for the status line."""
+    if "Forbidden" in error.message or "forbidden" in error.message:
+        return "not allowed to read it"
+    return error.message.splitlines()[0][:200]
+
+
 def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]:
     record = inventory.require(kube, namespace, instance)
-    objects, problems, endpoints, seen = [], [], [], []
+    objects, problems, endpoints, seen, unreadable = [], [], [], [], []
     pods_ready = pods_total = 0
     for item in record.get("objects") or []:
-        live = kube.get(item["resource"], item["name"], namespace)
+        ref = f"{item['kind']}/{item['name']}"
+        try:
+            live = kube.get(item["resource"], item["name"], namespace)
+        except CommandError as error:
+            objects.append({"object": ref, "state": "unreadable", "detail": _denied(error)})
+            unreadable.append(ref)
+            continue
         if live is not None and item.get("uid") and live["metadata"].get("uid") != item["uid"]:
             objects.append(
                 {
@@ -39,9 +56,16 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             )
             continue
         selector = health.pod_selector(live) if live else ""
-        pods = kube.get_json("pods", namespace, selector=selector) if selector else []
+        try:
+            pods = kube.get_json("pods", namespace, selector=selector) if selector else []
+        except CommandError as error:
+            # The workload's own status still says how many replicas are ready.
+            pods, selector = [], ""
+            if "pods" not in unreadable:
+                unreadable.append("pods")
+                problems.append({"pod": "*", "reason": "PodsUnreadable", "message": _denied(error)})
         state, detail = health.evaluate(live, pods)
-        objects.append({"object": f"{item['kind']}/{item['name']}", "state": state, "detail": detail})
+        objects.append({"object": ref, "state": state, "detail": detail})
         if selector:
             pods_total += sum(1 for pod in pods if not (pod.get("metadata") or {}).get("deletionTimestamp"))
             pods_ready += sum(1 for pod in pods if health.pod_ready(pod))
@@ -59,10 +83,11 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "stack": (record.get("stack") or {}).get("id"),
         "management": record.get("management") or {"mode": inventory.MANAGED},
         "phase": record.get("phase"),
-        "health": health.overall(objects, problems),
+        "health": health.overall(objects, problems, partial=bool(unreadable)),
         "objects": objects,
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
+        "unreadable": unreadable,
     }
 
 
@@ -163,12 +188,17 @@ def list_instances(kube: Kube, namespace: str) -> list[dict[str, Any]]:
             continue
         ready = total = 0
         accelerators: dict[str, int] = {}
+        unreadable = []
         for item in record.get("objects") or []:
-            live = kube.get(item["resource"], item["name"], namespace)
-            selector = health.pod_selector(live) if live else ""
+            try:
+                live = kube.get(item["resource"], item["name"], namespace)
+                selector = health.pod_selector(live) if live else ""
+                pods = kube.get_json("pods", namespace, selector=selector) if selector else []
+            except CommandError:
+                unreadable.append(f"{item['kind']}/{item['name']}")
+                continue
             if not selector:
                 continue
-            pods = kube.get_json("pods", namespace, selector=selector)
             total += sum(1 for pod in pods if not (pod.get("metadata") or {}).get("deletionTimestamp"))
             ready += sum(1 for pod in pods if health.pod_ready(pod))
             for _, template, count in pod_templates(live):
@@ -182,6 +212,7 @@ def list_instances(kube: Kube, namespace: str) -> list[dict[str, Any]]:
                 "phase": record.get("phase"),
                 "pods": {"ready": ready, "total": total},
                 "accelerators": accelerators,
+                "unreadable": unreadable,
             }
         )
     return listed

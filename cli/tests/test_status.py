@@ -259,3 +259,35 @@ def test_crash_logs_are_read_once_per_workload_and_only_when_allowed(cbrepo, clu
     problems = instance_status(kube, "team-a", "r1")["pods"]["problems"]
     assert [problem["reason"] for problem in problems] == ["CrashLoopBackOff"] * 2
     assert not any("log" in problem for problem in problems)
+
+
+def test_a_viewer_who_cannot_read_some_kinds_still_sees_the_rest(
+    cbrepo, cluster, tmp_path, capsys, monkeypatch
+):
+    kube = stood_up(cbrepo, cluster)
+    cluster.denied.add(("get", "services"))
+    status = instance_status(kube, "team-a", "r1")
+    assert [(item["object"], item["state"]) for item in status["objects"]] == [
+        ("Service/model-a", "unreadable"),
+        ("Deployment/model-a", "ready"),
+    ]
+    assert status["objects"][0]["detail"] == "not allowed to read it"
+    assert status["unreadable"] == ["Service/model-a"] and status["health"] == "Unknown"
+    assert status["pods"]["ready"] == 1 and status["endpoints"] == []
+    [item] = list_instances(kube, "team-a")
+    assert item["unreadable"] == ["Service/model-a"] and item["pods"] == {"ready": 1, "total": 1}
+
+    cluster.denied = {("get", "pods")}
+    status = instance_status(kube, "team-a", "r1")
+    assert [item["state"] for item in status["objects"]] == ["present", "ready"]
+    assert status["unreadable"] == ["pods"] and status["health"] == "Unknown"
+    assert status["pods"]["problems"] == [
+        {"pod": "*", "reason": "PodsUnreadable", "message": "not allowed to read it"}
+    ]
+
+    monkeypatch.setattr("llmd.commands.RUNNER", cluster)
+    cluster.denied = {("get", "services")}
+    assert main(["--state-dir", str(tmp_path), "status", "r1"]) == 0
+    out = capsys.readouterr().out
+    assert "r1 in team-a: Unknown" in out and "unreadable   Service/model-a  not allowed to read it" in out
+    assert "could not read 1 part(s) with your permissions in team-a" in out

@@ -240,7 +240,9 @@ def pod_problems(pods: list[dict[str, Any]]) -> list[dict[str, str]]:
     return problems
 
 
-def overall(objects: list[dict[str, Any]], problems: list[dict[str, str]]) -> str:
+def overall(objects: list[dict[str, Any]], problems: list[dict[str, str]], *, partial: bool = False) -> str:
+    """The instance's health. ``partial``: some objects or pods could not be read, so what looks
+    ready is Unknown instead."""
     states = [item["state"] for item in objects]
     if not objects:
         return "Missing"
@@ -248,6 +250,6 @@ def overall(objects: list[dict[str, Any]], problems: list[dict[str, str]]) -> st
         return "Degraded"
     if any(state == "failed" for state in states) or any(p["reason"] in FAILING_REASONS for p in problems):
         return "Failed"
-    if all(state in ("ready", "present") for state in states):
-        return "Ready"
+    if all(state in ("ready", "present", "unreadable") for state in states):
+        return "Unknown" if partial else "Ready"
     return "Progressing"

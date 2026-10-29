@@ -55,6 +55,11 @@ def print_status(status: dict) -> None:
                 print(f"      {text}")
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
+    if status.get("unreadable"):
+        print(
+            f"  could not read {len(status['unreadable'])} part(s) with your permissions in "
+            f"{status['namespace']}; health is from what could be read"
+        )
 
 
 def command_list(ctx: Context) -> int:
@@ -78,5 +83,7 @@ def command_list(ctx: Context) -> int:
         )
         columns = f"{item['instance']:<32} {item['management']:<9} {item['phase']:<10} {pods:<9} {gpus!s:<6}"
         print(f"{columns} {item['stack']}")
+        if item.get("unreadable"):
+            print(f"  {len(item['unreadable'])} object(s) could not be read; `llmd status` names them")
     print(f"\nDetails: llmd status INSTANCE -n {namespace}")
     return 0
