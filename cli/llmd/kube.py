@@ -186,11 +186,19 @@ class Kube:
         return "missing" if "NotFound" in result.message else "unknown"
 
     def get_json(
-        self, resource: str, namespace: str, *, names: list[str] | None = None, selector: str = ""
+        self,
+        resource: str,
+        namespace: str,
+        *,
+        names: list[str] | None = None,
+        selector: str = "",
+        field_selector: str = "",
     ) -> list[dict[str, Any]]:
         args = ["get", resource, *(names or []), "-n", namespace, "-o", "json", "--ignore-not-found"]
         if selector:
             args += ["-l", selector]
+        if field_selector:
+            args += ["--field-selector", field_selector]
         result = self.run(*args, timeout=60)
         if not result.ok:
             if "NotFound" in result.message or "doesn't have a resource type" in result.message:

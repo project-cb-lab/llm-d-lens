@@ -150,3 +150,54 @@ def test_pods_refused_at_creation_fail_the_deployment():
     }
     state, detail = health.evaluate(deployment, [])
     assert state == "failed" and detail.startswith("FailedCreate: pods") and "security context" in detail
+
+
+def warning(pod, reason, message, at, kind="Pod", type_="Warning"):
+    return {
+        "apiVersion": "v1",
+        "kind": "Event",
+        "metadata": {"name": f"{pod}.{reason}.{at}"},
+        "involvedObject": {"kind": kind, "name": pod},
+        "type": type_,
+        "reason": reason,
+        "message": message,
+        "lastTimestamp": f"2026-10-29T18:{at}:00Z",
+    }
+
+
+def test_a_pending_pod_with_no_other_reason_shows_its_latest_warning(cbrepo, cluster):
+    kube = stood_up(cbrepo, cluster)
+    pod = cluster.get("team-a", "pods", "model-a-0")
+    pod["status"] = {
+        "phase": "Pending",
+        "conditions": [{"type": "PodScheduled", "status": "True"}],
+        "containerStatuses": [{"name": "vllm", "state": {"waiting": {"reason": "ContainerCreating"}}}],
+    }
+    mount = "MountVolume.SetUp failed for volume model-cache: hostPath type check failed"
+    for event in (
+        warning("model-a-0", "FailedScheduling", "0/3 nodes are available", "01"),
+        warning("model-a-0", "FailedMount", mount, "02"),
+        warning("model-a-0", "FailedScheduling", "an old one, listed last", "00"),
+        warning("model-a-0", "Pulled", "a normal event", "03", type_="Normal"),
+        warning("model-a-1", "FailedMount", "another pod", "04"),
+    ):
+        cluster.put("team-a", event)
+    status = instance_status(kube, "team-a", "r1")
+    assert status["pods"]["problems"] == [
+        {"pod": "model-a-0", "reason": "FailedMount", "message": mount, "lastSeen": "2026-10-29T18:02:00Z"}
+    ]
+    pod["status"]["containerStatuses"][0]["state"]["waiting"] = {"reason": "ImagePullBackOff", "message": "x"}
+    calls = len(cluster.calls)
+    assert [problem["reason"] for problem in instance_status(kube, "team-a", "r1")["pods"]["problems"]] == [
+        "ImagePullBackOff"
+    ]
+    assert not [call for call in cluster.calls[calls:] if call[:2] == ["get", "events"]]
+
+
+def test_status_without_permission_to_read_events_shows_what_the_pods_say(cbrepo, cluster):
+    kube = stood_up(cbrepo, cluster)
+    pod = cluster.get("team-a", "pods", "model-a-0")
+    pod["status"] = {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"}]}
+    cluster.denied.add(("list", "events"))
+    status = instance_status(kube, "team-a", "r1")
+    assert status["pods"]["problems"] == []

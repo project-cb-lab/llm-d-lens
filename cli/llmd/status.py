@@ -3,6 +3,11 @@
 The same code serves instances llmd stood up and instances it imported: objects are found
 by the name and UID recorded in the instance's inventory, and pods through each
 workload's own selector.
+
+A pod that is not Ready is explained from its own status first. A Pending pod whose status
+says nothing (stuck in ContainerCreating on a volume that does not mount, say) gets its
+latest Warning event, from one read of the namespace's pod events. That read is best effort:
+without permission to list events, status shows what the pods say.
 """
 
 from __future__ import annotations
@@ -11,14 +16,14 @@ import time
 from typing import Any
 
 from . import health, inventory
-from .errors import NotReadyError
+from .errors import CommandError, NotReadyError
 from .kube import Kube
 from .policy import pod_templates, template_accelerators
 
 
 def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]:
     record = inventory.require(kube, namespace, instance)
-    objects, problems, endpoints = [], [], []
+    objects, problems, endpoints, seen = [], [], [], []
     pods_ready = pods_total = 0
     for item in record.get("objects") or []:
         live = kube.get(item["resource"], item["name"], namespace)
@@ -39,9 +44,11 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             pods_total += sum(1 for pod in pods if not (pod.get("metadata") or {}).get("deletionTimestamp"))
             pods_ready += sum(1 for pod in pods if health.pod_ready(pod))
             problems += health.pod_problems(pods)
+            seen += pods
         if live and item["kind"] == "Service":
             for port in (live.get("spec") or {}).get("ports") or []:
                 endpoints.append(f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}")
+    problems += _pending_warnings(kube, namespace, seen, problems)
     return {
         "instance": instance,
         "namespace": namespace,
@@ -53,6 +60,55 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
     }
+
+
+#: The pod's PodScheduled condition already says why it is not scheduled, and stays current.
+_COVERED_EVENTS = {"FailedScheduling"}
+
+
+def _event_time(event: dict[str, Any]) -> str:
+    series = event.get("series") or {}
+    return str(
+        event.get("lastTimestamp")
+        or series.get("lastObservedTime")
+        or event.get("eventTime")
+        or (event.get("metadata") or {}).get("creationTimestamp")
+        or ""
+    )
+
+
+def _pending_warnings(
+    kube: Kube, namespace: str, pods: list[dict[str, Any]], problems: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    """The latest Warning event of each Pending pod that no problem explains yet."""
+    explained = {problem["pod"] for problem in problems}
+    quiet = {
+        (pod.get("metadata") or {}).get("name", "")
+        for pod in pods
+        if (pod.get("status") or {}).get("phase") == "Pending"
+        and not (pod.get("metadata") or {}).get("deletionTimestamp")
+    } - explained
+    if not quiet:
+        return []
+    try:
+        events = kube.get_json("events", namespace, field_selector="involvedObject.kind=Pod,type=Warning")
+    except CommandError:
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for event in events:
+        name = (event.get("involvedObject") or {}).get("name", "")
+        if name in quiet and event.get("reason") not in _COVERED_EVENTS:
+            if _event_time(event) >= _event_time(latest.get(name, {})):
+                latest[name] = event
+    return [
+        {
+            "pod": name,
+            "reason": event.get("reason") or "Warning",
+            "message": (event.get("message") or "")[:300],
+            "lastSeen": _event_time(event),
+        }
+        for name, event in sorted(latest.items())
+    ]
 
 
 def wait_ready(

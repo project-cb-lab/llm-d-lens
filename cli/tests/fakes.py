@@ -22,6 +22,7 @@ CORE = {
     "PersistentVolumeClaim": ("persistentvolumeclaims", True),
     "PersistentVolume": ("persistentvolumes", False),
     "Pod": ("pods", True),
+    "Event": ("events", True),
     "Namespace": ("namespaces", False),
 }
 DEFAULT_SERVED = {
@@ -430,12 +431,26 @@ class FakeCluster:
                 return False
         return True
 
+    def _field_selected(self, document: dict, selector: str) -> bool:
+        """``a.b=value`` terms, as the API server matches an object's selectable fields."""
+        for term in filter(None, selector.split(",")):
+            path, _, value = term.partition("=")
+            field = document
+            for key in path.split("."):
+                field = field.get(key) if isinstance(field, dict) else None
+            if str(field) != value:
+                return False
+        return True
+
     def _get(self, args: list[str], stdin: str) -> Result:
         resource = self._canonical(args[1])
         namespace = self._option(args, "-n") if self._namespaced(resource) else ""
         selector = self._option(args, "-l")
+        fields = self._option(args, "--field-selector")
         names = [
-            arg for arg in args[2:] if not arg.startswith("-") and arg not in (namespace, selector, "json")
+            arg
+            for arg in args[2:]
+            if not arg.startswith("-") and arg not in (namespace, selector, fields, "json")
         ]
         if ("get", resource) in self.denied or ("list", resource) in self.denied:
             return _fail(f'Error from server (Forbidden): {resource} is forbidden: User "{self.user}"')
@@ -446,6 +461,7 @@ class FakeCluster:
             and kind == resource
             and (not names or name in names)
             and (not selector or self._selected(document, selector))
+            and (not fields or self._field_selected(document, fields))
         ]
         return _ok(json.dumps({"kind": "List", "items": items}))
 

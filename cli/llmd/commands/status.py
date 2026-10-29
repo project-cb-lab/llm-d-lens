@@ -44,7 +44,8 @@ def print_status(status: dict) -> None:
     for item in status["objects"]:
         print(f"  {item['state']:<12} {item['object']}" + (f"  {item['detail']}" if item["detail"] else ""))
     for problem in pods["problems"][:10]:
-        print(f"  pod {problem['pod']}: {problem['reason']} {problem['message']}".rstrip())
+        seen = f" (event, last seen {problem['lastSeen']})" if problem.get("lastSeen") else ""
+        print(f"  pod {problem['pod']}: {problem['reason']} {problem['message']}".rstrip() + seen)
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
 
