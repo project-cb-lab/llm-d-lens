@@ -133,3 +133,20 @@ def test_status_and_list_commands(cbrepo, cluster, tmp_path, capsys, monkeypatch
     assert main([*state, "-o", "json", "list"]) == 0
     assert json.loads(capsys.readouterr().out)["instances"][0]["stack"] == STACK
     assert main([*state, "status", "missing"]) == 6
+
+
+def test_pods_refused_at_creation_fail_the_deployment():
+    refused = {
+        "type": "ReplicaFailure",
+        "status": "True",
+        "reason": "FailedCreate",
+        "message": 'pods "m-1" is forbidden: unable to validate against any security context constraint',
+    }
+    deployment = {
+        "kind": "Deployment",
+        "metadata": {"generation": 1},
+        "spec": {"replicas": 2},
+        "status": {"observedGeneration": 1, "conditions": [refused]},
+    }
+    state, detail = health.evaluate(deployment, [])
+    assert state == "failed" and detail.startswith("FailedCreate: pods") and "security context" in detail

@@ -154,6 +154,11 @@ def evaluate(item: dict[str, Any] | None, pods: list[dict[str, Any]]) -> tuple[s
         ready = int(status.get("readyReplicas") or 0)
         if (conditions.get("Progressing") or {}).get("reason") == "ProgressDeadlineExceeded":
             return "failed", conditions["Progressing"].get("message", "progress deadline exceeded")
+        # Pods refused at creation (an SCC, a quota) do not exist, so no pod reports the problem.
+        refused = conditions.get("ReplicaFailure") or {}
+        if refused.get("status") == "True":
+            reason = refused.get("reason") or "ReplicaFailure"
+            return "failed", f"{reason}: {(refused.get('message') or '')[:300]}"
         current = int(status.get("replicas") or 0)
         if desired == 0:
             return (
