@@ -470,6 +470,8 @@ def _analyze(documents: list[dict[str, Any]], context: PolicyContext, result: Po
     """Safety findings, prerequisites, and the workload summary."""
     findings = result.findings
     severity = "warning" if context.allow_privileged else "error"
+    # Once acknowledged, the findings stay as warnings, without the hint that asks for the flag.
+    acknowledge = "" if context.allow_privileged else ACKNOWLEDGE
     provided = {(document["kind"], document["metadata"]["name"]) for document in documents}
     required: dict[tuple[str, str], set[str]] = {}
 
@@ -505,13 +507,15 @@ def _analyze(documents: list[dict[str, Any]], context: PolicyContext, result: Po
             for name in monitor_secrets(document):
                 need("Secret", name, ref)
         for location, template, pods in pod_templates(document):
-            _analyze_template(document, location, template, pods, severity, need, result)
+            _analyze_template(document, location, template, pods, severity, acknowledge, need, result)
     for (kind, name), users in sorted(required.items()):
         if (kind, name) != ("ServiceAccount", "default"):
             result.prerequisites.append({"kind": kind, "name": name, "usedBy": sorted(users)})
 
 
-def _analyze_template(document, location, template, pods, severity, need, result: PolicyResult) -> None:
+def _analyze_template(
+    document, location, template, pods, severity, acknowledge, need, result: PolicyResult
+) -> None:
     findings = result.findings
     ref = object_ref(document)
     where = ref if location in ("template", "pod") else f"{ref} {location}"
@@ -519,7 +523,7 @@ def _analyze_template(document, location, template, pods, severity, need, result
     for key in ("hostNetwork", "hostPID", "hostIPC"):
         if spec.get(key):
             findings.append(
-                Finding(severity, "host-namespace", f"{where} sets {key}", object=ref, hint=ACKNOWLEDGE)
+                Finding(severity, "host-namespace", f"{where} sets {key}", object=ref, hint=acknowledge)
             )
     annotations = (template.get("metadata") or {}).get("annotations") or {}
     for network in _network_names(annotations.get(MULTUS_ANNOTATION) or ""):
@@ -537,7 +541,7 @@ def _analyze_template(document, location, template, pods, severity, need, result
                     "host-path",
                     f"{where} mounts hostPath {path} as volume {volume.get('name')}",
                     object=ref,
-                    hint=ACKNOWLEDGE,
+                    hint=acknowledge,
                 )
             )
         elif "persistentVolumeClaim" in volume:
@@ -558,7 +562,7 @@ def _analyze_template(document, location, template, pods, severity, need, result
                     "privileged",
                     f"{where} container {name} is privileged",
                     object=ref,
-                    hint=ACKNOWLEDGE,
+                    hint=acknowledge,
                 )
             )
         added = set((security.get("capabilities") or {}).get("add") or []) - _SAFE_CAPABILITIES

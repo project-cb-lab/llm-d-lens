@@ -147,6 +147,9 @@ def test_privileged_pods_and_host_paths_block_unless_acknowledged():
     assert codes(blocked, "warning") == ["capabilities"]
     allowed = apply_policy([risky], PolicyContext(namespace="team-a", instance="r1", allow_privileged=True))
     assert not codes(allowed) and {"host-path", "privileged"} <= set(codes(allowed, "warning"))
+    assert all(finding.hint for finding in blocked.findings if finding.severity == "error")
+    acknowledged = [finding for finding in allowed.findings if finding.code in ("host-path", "privileged")]
+    assert acknowledged and not any(finding.hint for finding in acknowledged)
 
 
 def test_what_the_stack_uses_but_does_not_ship_is_a_prerequisite():
