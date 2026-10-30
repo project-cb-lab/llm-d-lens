@@ -93,6 +93,11 @@ def test_standup_refuses_a_changed_plan_and_blocking_findings(cbrepo, cluster):
 def test_one_instance_runs_one_stack(cbrepo, cluster):
     lifecycle.standup(Kube(runner=cluster), plan_for(cbrepo, cluster))
     other = plan_for(cbrepo, cluster, stack="manifests/experiments/model-c/plain")
+    [finding] = [finding for finding in other.blocking if finding.code == "stack-differs"]
+    assert finding.message == f"instance r1 runs stack {STACK}, not manifests/experiments/model-c/plain"
+    with pytest.raises(PolicyError, match="blocking"):
+        lifecycle.standup(Kube(runner=cluster), other)
+    other.policy.findings[:] = [finding for finding in other.findings if finding.code != "stack-differs"]
     with pytest.raises(ConflictError, match="runs stack"):
         lifecycle.standup(Kube(runner=cluster), other)
 

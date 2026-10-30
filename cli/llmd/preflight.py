@@ -205,6 +205,7 @@ def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
         )
     owned = {(item["kind"], item["name"]) for item in (record or {}).get("objects") or []}
     if existing == "refuse":
+        _check_stack(plan, record)
         _list_prunes(kube, plan, record)
     counts = {"create": 0, "update": 0, "foreign": 0}
     found: list[dict[str, Any]] = []
@@ -237,6 +238,21 @@ def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
                 )
             )
     plan.cluster["objects"] = counts
+
+
+def _check_stack(plan: Plan, record: dict[str, Any] | None) -> None:
+    """An instance runs one stack: a standup of another stack path is refused."""
+    running = ((record or {}).get("stack") or {}).get("id")
+    if not running or running == plan.stack.id:
+        return
+    plan.findings.append(
+        Finding(
+            "error",
+            "stack-differs",
+            f"instance {plan.instance} runs stack {running}, not {plan.stack.id}",
+            hint="Tear it down first, or stand this stack up under another --name.",
+        )
+    )
 
 
 def _list_prunes(kube: Kube, plan: Plan, record: dict[str, Any] | None) -> None:
