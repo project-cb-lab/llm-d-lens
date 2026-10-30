@@ -277,3 +277,20 @@ def test_duplicates_are_refused_and_the_apply_order_puts_workloads_last():
     )
     assert [doc["kind"] for doc in result.documents] == ["ServiceAccount", "Service", "Deployment"]
     assert codes(result) == ["duplicate-object"]
+
+
+def test_a_claim_bound_in_advance_to_a_volume_is_a_warning():
+    claim = {
+        "apiVersion": "v1",
+        "kind": "PersistentVolumeClaim",
+        "metadata": {"name": "model-cache", "namespace": "team-a"},
+        "spec": {"accessModes": ["ReadOnlyMany"], "volumeName": "model-cache-pv"},
+    }
+    result = apply_policy(
+        [deployment(namespace="team-a"), claim], PolicyContext(namespace="team-a", instance="r1")
+    )
+    [finding] = [finding for finding in result.findings if finding.code == "claim-prebound"]
+    assert finding.severity == "warning" and "model-cache-pv" in finding.message
+    assert not codes(result) and "PersistentVolumeClaim" not in {
+        item["kind"] for item in result.prerequisites
+    }

@@ -528,6 +528,21 @@ def _analyze(documents: list[dict[str, Any]], context: PolicyContext, result: Po
         if document["kind"] in MONITOR_KINDS:
             for name in monitor_secrets(document):
                 need("Secret", name, ref)
+        volume_name = (document.get("spec") or {}).get("volumeName")
+        if document["kind"] == "PersistentVolumeClaim" and volume_name:
+            # PersistentVolumes are cluster-scoped: llmd neither creates nor reads them.
+            findings.append(
+                Finding(
+                    "warning",
+                    "claim-prebound",
+                    f"{ref} is bound in advance to PersistentVolume {volume_name}, which only an "
+                    "administrator creates; until it exists the claim stays Pending and the pods that "
+                    "use it are not scheduled",
+                    object=ref,
+                    hint="Have an administrator apply the stack's PersistentVolume first. Teardown keeps "
+                    "the claim unless --delete-volumes; deleting it leaves that PersistentVolume Released.",
+                )
+            )
         for location, template, pods in pod_templates(document):
             _analyze_template(document, location, template, pods, severity, acknowledge, need, result)
     for (kind, name), users in sorted(required.items()):
