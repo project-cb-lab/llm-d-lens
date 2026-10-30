@@ -13,6 +13,8 @@ MANAGED_BY_LABEL = "app.kubernetes.io/managed-by"
 MANAGED_BY_VALUE = "llm-d-lens"
 INSTANCE_LABEL = "lens.llm-d.ai/instance"
 FIELD_MANAGER = "llm-d-lens"
+#: Kinds a standup keeps when the stack no longer renders them, and teardown keeps unless asked.
+KEPT_KINDS = {"PersistentVolumeClaim"}
 
 _DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 #: Short enough that generated names (``lens-instance-<name>``) stay valid.

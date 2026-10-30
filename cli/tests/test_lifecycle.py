@@ -56,6 +56,10 @@ def test_a_second_standup_updates_and_prunes(cbrepo, cluster):
     service.write_text(service.read_text().replace("  - service.yaml\n", ""))
     again = plan_for(cbrepo, cluster)
     assert not again.blocking and again.cluster["objects"] == {"create": 0, "update": 1, "foreign": 0}
+    assert again.cluster["prune"] == ["Service/model-a"]
+    assert [f.message for f in again.findings if f.code == "prune"] == [
+        "standup deletes 1 object(s) of instance r1 the stack no longer renders: Service/model-a"
+    ]
     result = lifecycle.standup(Kube(runner=cluster), again)
     assert result["pruned"] == ["Service/model-a"]
     assert cluster.get("team-a", "services", "model-a") is None
@@ -70,7 +74,9 @@ def test_a_pruned_object_someone_else_took_over_is_left_alone(cbrepo, cluster):
     )
     service = cbrepo / "manifests/production/model-a/base/model-server/kustomization.yaml"
     service.write_text(service.read_text().replace("  - service.yaml\n", ""))
-    result = lifecycle.standup(Kube(runner=cluster), plan_for(cbrepo, cluster))
+    again = plan_for(cbrepo, cluster)
+    assert again.cluster["prune"] == [] and "prune" not in {f.code for f in again.findings}
+    result = lifecycle.standup(Kube(runner=cluster), again)
     assert result["pruned"] == [] and cluster.get("team-a", "services", "model-a") is not None
 
 

@@ -18,7 +18,15 @@ from typing import Any
 from . import inventory
 from .errors import CommandError
 from .kube import Kube
-from .model import INSTANCE_LABEL, MANAGED_BY_LABEL, MANAGED_BY_VALUE, Finding, api_group, object_ref
+from .model import (
+    INSTANCE_LABEL,
+    KEPT_KINDS,
+    MANAGED_BY_LABEL,
+    MANAGED_BY_VALUE,
+    Finding,
+    api_group,
+    object_ref,
+)
 from .plan import Plan
 from .policy import MONITOR_KINDS
 
@@ -196,6 +204,8 @@ def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
             )
         )
     owned = {(item["kind"], item["name"]) for item in (record or {}).get("objects") or []}
+    if existing == "refuse":
+        _list_prunes(kube, plan, record)
     counts = {"create": 0, "update": 0, "foreign": 0}
     found: list[dict[str, Any]] = []
     for document, resource in zip(plan.documents, resources(kube, plan), strict=True):
@@ -227,3 +237,39 @@ def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
                 )
             )
     plan.cluster["objects"] = counts
+
+
+def _list_prunes(kube: Kube, plan: Plan, record: dict[str, Any] | None) -> None:
+    """What a standup would delete: the instance's recorded objects the stack no longer renders
+    that are still this instance's. Claims are kept."""
+    if not record or inventory.management(record) == inventory.IMPORTED:
+        return
+    planned = {(doc["kind"], doc["metadata"]["name"]) for doc in plan.documents}
+    prunes, kept = [], []
+    for item in record.get("objects") or []:
+        if (item["kind"], item["name"]) in planned:
+            continue
+        ref = f"{item['kind']}/{item['name']}"
+        if item["kind"] in KEPT_KINDS:
+            kept.append(ref)
+            continue
+        live = kube.get(item["resource"], item["name"], plan.namespace)
+        labels = ((live or {}).get("metadata") or {}).get("labels") or {}
+        if labels.get(INSTANCE_LABEL) == plan.instance and labels.get(MANAGED_BY_LABEL) == MANAGED_BY_VALUE:
+            prunes.append(ref)
+    plan.cluster["prune"] = prunes
+    if prunes:
+        plan.findings.append(
+            Finding(
+                "warning",
+                "prune",
+                f"standup deletes {len(prunes)} object(s) of instance {plan.instance} the stack no longer "
+                f"renders: {', '.join(prunes)}",
+            )
+        )
+    for ref in kept:
+        plan.findings.append(
+            Finding(
+                "info", "prune-kept", f"{ref} is no longer rendered; standup keeps it (a claim)", object=ref
+            )
+        )

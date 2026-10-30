@@ -14,11 +14,9 @@ from typing import Any
 from . import inventory, yamlio
 from .errors import ConflictError, PolicyError
 from .kube import Kube
-from .model import INSTANCE_LABEL, MANAGED_BY_LABEL, MANAGED_BY_VALUE
+from .model import INSTANCE_LABEL, KEPT_KINDS, MANAGED_BY_LABEL, MANAGED_BY_VALUE
 from .plan import Plan
 from .preflight import resources
-
-KEPT_KINDS = {"PersistentVolumeClaim"}
 
 
 def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "") -> dict[str, Any]:
