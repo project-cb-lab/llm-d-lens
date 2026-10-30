@@ -26,6 +26,8 @@ class Options:
     instance: str
     allow_privileged: bool = False
     skip_admin_parts: bool = False
+    #: Let the instance move to this stack path from the one it runs (the objects stay where they are).
+    switch_stack: bool = False
 
 
 @dataclass

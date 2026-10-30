@@ -37,10 +37,17 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
             f"instance {plan.instance} was imported; standup never takes over another workflow's objects",
             hint="Change it with `llmd rollouts`.",
         )
-    if previous and previous["stack"]["id"] != plan.stack.id:
+    switched = bool(previous) and previous["stack"]["id"] != plan.stack.id
+    if switched and not plan.options.switch_stack:
         raise ConflictError(
             f"instance {plan.instance} runs stack {previous['stack']['id']}, not {plan.stack.id}",
-            hint="Tear it down first, or stand this stack up under another --name.",
+            hint="Pass --switch-stack to move it to this stack in place, tear it down first, or stand this "
+            "stack up under another --name.",
+        )
+    if switched and (previous.get("rollout") or {}).get("phase") in ("Rolling", "Paused", "Aborting"):
+        raise ConflictError(
+            f"instance {plan.instance} has a rollout in progress; it cannot move to another stack now",
+            hint="Finish or abort the rollout first.",
         )
     names = resources(kube, plan)
     planned = [inventory.object_entry(doc, name) for doc, name in zip(plan.documents, names, strict=True)]
@@ -57,6 +64,7 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
         "management": {"mode": inventory.MANAGED},
         "phase": "Applying",
         "stack": {"id": plan.stack.id, "source": plan.stack.source.describe()},
+        **({"previousStack": previous["stack"]} if switched else _kept_previous_stack(previous)),
         "planDigest": plan.digest,
         # Recorded before applying, with what may still be there from the last standup.
         "objects": planned + stale,
@@ -78,7 +86,13 @@ def standup(kube: Kube, plan: Plan, *, expected_digest: str = "", actor: str = "
         "applied": len(applied),
         "pruned": pruned,
         "digest": plan.digest,
+        **({"switchedFrom": previous["stack"]["id"]} if switched else {}),
     }
+
+
+def _kept_previous_stack(previous: dict[str, Any] | None) -> dict[str, Any]:
+    """A later standup of the same stack keeps the record of the stack the instance came from."""
+    return {"previousStack": previous["previousStack"]} if (previous or {}).get("previousStack") else {}
 
 
 def _owned(live: dict[str, Any] | None, instance: str) -> bool:

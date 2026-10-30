@@ -81,6 +81,7 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "instance": instance,
         "namespace": namespace,
         "stack": (record.get("stack") or {}).get("id"),
+        "previousStack": (record.get("previousStack") or {}).get("id"),
         "management": record.get("management") or {"mode": inventory.MANAGED},
         "phase": record.get("phase"),
         "health": health.overall(objects, problems, partial=bool(unreadable)),

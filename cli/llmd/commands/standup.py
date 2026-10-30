@@ -55,6 +55,8 @@ def command_standup(ctx: Context) -> int:
         return 0
     where = f"{result['instance']} in {result['namespace']}"
     print(f"Stood up {where} ({result['applied']} objects, digest {result['digest'][:12]})")
+    if result.get("switchedFrom"):
+        print(f"  moved from stack {result['switchedFrom']}")
     for item in result["pruned"]:
         print(f"  pruned {item} (no longer in the stack)")
     print(f"Follow it with: llmd status {result['instance']} -n {result['namespace']}")

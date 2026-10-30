@@ -31,6 +31,12 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="leave out cluster-scoped objects and SCC bindings; an administrator applies them",
     )
+    parser.add_argument(
+        "--switch-stack",
+        action="store_true",
+        help="let an instance that runs another stack path move to this one, in place: objects it shares "
+        "are updated, objects it no longer renders are deleted",
+    )
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -52,6 +58,7 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
         instance=args.name or catalog.default_name(stack),
         allow_privileged=args.allow_privileged,
         skip_admin_parts=args.skip_admin_parts,
+        switch_stack=getattr(args, "switch_stack", False),
     )
     scope = fallback_scope if kube is None else _discovered_scope(kube)
     return make_plan(stack, options, runner=ctx.runner, scope=scope, label=label)

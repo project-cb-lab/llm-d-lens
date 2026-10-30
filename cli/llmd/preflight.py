@@ -241,16 +241,28 @@ def _check_existing(kube: Kube, plan: Plan, existing: str) -> None:
 
 
 def _check_stack(plan: Plan, record: dict[str, Any] | None) -> None:
-    """An instance runs one stack: a standup of another stack path is refused."""
+    """An instance runs one stack: a standup of another stack path is refused unless --switch-stack."""
     running = ((record or {}).get("stack") or {}).get("id")
     if not running or running == plan.stack.id:
+        return
+    plan.cluster["switchStack"] = {"from": running, "to": plan.stack.id}
+    if plan.options.switch_stack:
+        plan.findings.append(
+            Finding(
+                "warning",
+                "stack-switched",
+                f"instance {plan.instance} moves from stack {running} to {plan.stack.id}; later standups "
+                f"and rollouts follow {plan.stack.id}",
+            )
+        )
         return
     plan.findings.append(
         Finding(
             "error",
             "stack-differs",
             f"instance {plan.instance} runs stack {running}, not {plan.stack.id}",
-            hint="Tear it down first, or stand this stack up under another --name.",
+            hint="Pass --switch-stack to move it to this stack in place, tear it down first, or stand this "
+            "stack up under another --name.",
         )
     )
 

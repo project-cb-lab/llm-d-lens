@@ -40,7 +40,10 @@ def print_status(status: dict) -> None:
     pods = status["pods"]
     counts = f"pods {pods['ready']}/{pods['total']} ready{owner}"
     print(f"{status['instance']} in {status['namespace']}: {status['health']} ({counts})")
-    print(f"  stack {status['stack']}")
+    print(
+        f"  stack {status['stack']}"
+        + (f" (moved from {status['previousStack']})" if status.get("previousStack") else "")
+    )
     for item in status["objects"]:
         print(f"  {item['state']:<12} {item['object']}" + (f"  {item['detail']}" if item["detail"] else ""))
     for problem in pods["problems"][:10]:
