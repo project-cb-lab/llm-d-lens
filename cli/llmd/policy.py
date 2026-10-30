@@ -299,10 +299,13 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
             findings.extend(_drop_route_host(document, context.namespace))
     # A stack whose objects name several namespaces puts some of them where their readers look
     # (a dashboard in the Grafana instance's namespace, say); in the target namespace those
-    # readers may not find them, so each such object is named.
-    if len(set(origins) - {""}) > 1 or (source_namespaces and context.namespace in origins):
+    # readers may not find them, so each such object is named. The stack's own namespace is the
+    # one most of its objects name; moving those is the namespace move itself.
+    named = [written_for for written_for in origins if written_for]
+    home = max(sorted(set(named)), key=named.count) if named else ""
+    if len(set(named)) > 1:
         for document, written_for in zip(kept, origins, strict=True):
-            if written_for and written_for != context.namespace:
+            if written_for and written_for != home and written_for != context.namespace:
                 ref = object_ref(document)
                 findings.append(
                     Finding(

@@ -102,6 +102,14 @@ def test_an_object_written_for_another_namespace_is_named_and_the_routes_host_ke
     assert moved.severity == "warning" and moved.object == "GrafanaDashboard/overview"
     assert "route-host-dropped" not in codes(result, "info")
 
+    # The same stack moved as a whole: only the dashboard is named, and the Route loses its host.
+    route["metadata"]["namespace"] = "team-b"
+    whole = [deployment(namespace="team-b"), route, dashboard]
+    result = apply_policy(whole, PolicyContext(namespace="team-a", instance="r1"))
+    moved = [finding.object for finding in result.findings if finding.code == "moved-from-other-namespace"]
+    assert moved == ["GrafanaDashboard/overview"]
+    assert "route-host-dropped" in codes(result, "info")
+
 
 def test_a_monitor_follows_the_stack_into_the_target_namespace():
     """A PodMonitor that still named the old namespace would scrape nothing where the stack runs."""
