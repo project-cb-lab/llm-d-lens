@@ -232,6 +232,8 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
     result = PolicyResult()
     findings = result.findings
     kept: list[dict[str, Any]] = []
+    #: The namespace each kept object was written for ("" when it named none), in ``kept`` order.
+    origins: list[str] = []
     source_namespaces: set[str] = set()
     seen: set[tuple[str, str, str]] = set()
     for original in rendered:
@@ -284,14 +286,34 @@ def apply_policy(rendered: list[dict[str, Any]], context: PolicyContext) -> Poli
             source_namespaces.add(written_for)
         metadata["namespace"] = context.namespace
         kept.append(document)
+        origins.append(written_for or "")
 
     rewrites = 0
     for old in sorted(source_namespaces):
         for index, document in enumerate(kept):
             kept[index], count = _rewrite_namespace_references(document, old, context.namespace)
             rewrites += count
-            if document["kind"] == "Route" and document.get("spec", {}).get("host"):
-                findings.extend(_drop_route_host(kept[index], context.namespace))
+    for document, written_for in zip(kept, origins, strict=True):
+        moved = written_for and written_for != context.namespace
+        if moved and document["kind"] == "Route" and document.get("spec", {}).get("host"):
+            findings.extend(_drop_route_host(document, context.namespace))
+    # A stack whose objects name several namespaces puts some of them where their readers look
+    # (a dashboard in the Grafana instance's namespace, say); in the target namespace those
+    # readers may not find them, so each such object is named.
+    if len(set(origins) - {""}) > 1 or (source_namespaces and context.namespace in origins):
+        for document, written_for in zip(kept, origins, strict=True):
+            if written_for and written_for != context.namespace:
+                ref = object_ref(document)
+                findings.append(
+                    Finding(
+                        "warning",
+                        "moved-from-other-namespace",
+                        f"{ref} was written for namespace {written_for}, unlike the rest of the stack; "
+                        f"it is applied in {context.namespace} instead, where what reads it in "
+                        f"{written_for} may not find it",
+                        object=ref,
+                    )
+                )
     if source_namespaces:
         result.source_namespaces = sorted(source_namespaces)
         findings.append(

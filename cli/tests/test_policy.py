@@ -75,6 +75,32 @@ def test_objects_move_into_the_target_namespace_and_references_follow():
     assert "host" not in next(doc for doc in result.documents if doc["kind"] == "Route")["spec"]
     assert result.source_namespaces == ["written-for"]
     assert {"namespace-rewritten", "route-host-dropped"} <= set(codes(result, "info"))
+    assert "moved-from-other-namespace" not in codes(result, "warning")
+
+
+def test_an_object_written_for_another_namespace_is_named_and_the_routes_host_kept():
+    route = {
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {"name": "api", "namespace": "team-a"},
+        "spec": {"host": "api-team-a.apps.example.invalid"},
+    }
+    dashboard = {
+        "apiVersion": "grafana.integreatly.org/v1beta1",
+        "kind": "GrafanaDashboard",
+        "metadata": {"name": "overview", "namespace": "grafana"},
+        "spec": {"json": "{}"},
+    }
+    result = apply_policy(
+        [deployment(namespace="team-a"), route, dashboard], PolicyContext(namespace="team-a", instance="r1")
+    )
+    assert {doc["metadata"]["namespace"] for doc in result.documents} == {"team-a"}
+    assert next(doc for doc in result.documents if doc["kind"] == "Route")["spec"]["host"] == (
+        "api-team-a.apps.example.invalid"
+    )
+    [moved] = [finding for finding in result.findings if finding.code == "moved-from-other-namespace"]
+    assert moved.severity == "warning" and moved.object == "GrafanaDashboard/overview"
+    assert "route-host-dropped" not in codes(result, "info")
 
 
 def test_a_monitor_follows_the_stack_into_the_target_namespace():
